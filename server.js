@@ -143,6 +143,48 @@ app.get('/api/progreso/:usuario', async (req, res) => {
     }
 });
 
+// Eliminar curso por ID
+app.delete('/api/curso/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const result = await cursosCol.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 1) {
+            res.json({ mensaje: 'Curso eliminado' });
+        } else {
+            res.status(404).json({ error: 'Curso no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar el curso' });
+    }
+});
+
+// Editar curso por ID
+app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { titulo, descripcion } = req.body;
+        let pasos = [];
+        if (req.body.pasos) {
+            pasos = JSON.parse(req.body.pasos);
+            pasos = pasos.map(p => ({
+                ...p,
+                imagen: p.imagen ? `/uploads/${p.imagen}` : null
+            }));
+        }
+        const result = await cursosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { titulo, descripcion, pasos } }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Curso editado' });
+        } else {
+            res.status(404).json({ error: 'Curso no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al editar el curso' });
+    }
+});
+
 // Servir imágenes
 app.use('/uploads', express.static(uploadsDir));
 
