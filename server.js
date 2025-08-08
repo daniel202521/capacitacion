@@ -20,7 +20,7 @@ const MONGO_URL = 'mongodb+srv://daniel:Darevalo2020@capacitacion.nxd7yl9.mongod
 const DB_NAME = 'capacitacion';
 let db, cursosCol, usuariosCol;
 
-MongoClient.connect(MONGO_URL, { useUnifiedTopology: true })
+MongoClient.connect(MONGO_URL)
     .then(client => {
         db = client.db(DB_NAME);
         cursosCol = db.collection('cursos');
