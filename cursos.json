@@ -1,0 +1,24 @@
+[
+  {
+    "titulo": "cctv",
+    "descripcion": "como configurar una camara",
+    "pasos": [
+      {
+        "titulo": "activasion",
+        "descripcion": "la camra se activa",
+        "imagen": null
+      }
+    ]
+  },
+  {
+    "titulo": "control de acceso",
+    "descripcion": "como configurar control de acceso",
+    "pasos": [
+      {
+        "titulo": "conexion",
+        "descripcion": "las conecciones",
+        "imagen": "/uploads/curso_1754608567484_paso0_SBF-Access-control_topo.jpg"
+      }
+    ]
+  }
+]
