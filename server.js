@@ -16,7 +16,7 @@ const io = new Server(server, {
 });
 
 // --- MongoDB config ---
-const MONGO_URL = 'mongodb+srv://daniel:Darevalo2020@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion';
+const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion';
 const DB_NAME = 'capacitacion';
 let db, cursosCol, usuariosCol;
 
