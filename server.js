@@ -85,9 +85,20 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
 app.get('/api/imagen/:nombre', async (req, res) => {
     try {
         const nombre = req.params.nombre;
+        // Buscar el archivo en GridFS para obtener el contentType
+        const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
+        if (!files || files.length === 0) {
+            return res.status(404).json({ error: 'Imagen no encontrada' });
+        }
+        const file = files[0];
+        // Setear CORS headers manualmente para imágenes
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        // Setear el Content-Type real
+        res.set('Content-Type', file.contentType || 'application/octet-stream');
         const downloadStream = gfs.openDownloadStreamByName(nombre);
         downloadStream.on('error', () => res.status(404).json({ error: 'Imagen no encontrada' }));
-        res.set('Content-Type', 'image/jpeg'); // O puedes detectar el tipo
         downloadStream.pipe(res);
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener la imagen' });
