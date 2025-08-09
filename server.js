@@ -3,9 +3,8 @@ const cors = require('cors');
 const multer = require('multer');
 const http = require('http');
 const { Server } = require('socket.io');
-const path = require('path');
-const { MongoClient, ObjectId } = require('mongodb');
-const fs = require('fs');
+const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
+const stream = require('stream');
 
 const app = express();
 const server = http.createServer(app);
@@ -18,32 +17,22 @@ const io = new Server(server, {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol;
+let db, cursosCol, usuariosCol, gfs;
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
         db = client.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
-        console.log('Conectado a MongoDB');
+        gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
+        console.log('Conectado a MongoDB y GridFS');
     })
     .catch(err => {
         console.error('Error conectando a MongoDB', err);
         process.exit(1);
     });
 
-// Carpeta para imágenes
-const uploadsDir = path.join(__dirname, '../frontend/uploads');
-if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, uploadsDir);
-    },
-    filename: function (req, file, cb) {
-        cb(null, file.originalname);
-    }
-});
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
 
 const corsOptions = {
@@ -55,19 +44,35 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Guardar curso y pasos en MongoDB y guardar imágenes
+// Guardar curso y pasos en MongoDB y guardar imágenes en GridFS
 app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
     try {
         const { titulo, descripcion } = req.body;
         let pasos = [];
+        let imagenesMap = {};
+        if (req.files && req.files.length > 0) {
+            // Guardar cada imagen en GridFS
+            for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                imagenesMap[file.originalname] = file.originalname;
+            }
+        }
         if (req.body.pasos) {
             pasos = JSON.parse(req.body.pasos);
             pasos = pasos.map(p => ({
                 ...p,
-                imagen: p.imagen ? `/uploads/${p.imagen}` : null
+                imagen: p.imagen && imagenesMap[p.imagen] ? imagenesMap[p.imagen] : null
             }));
         }
-        // Insertar en MongoDB
         await cursosCol.insertOne({ titulo, descripcion, pasos });
         io.emit('nuevoCurso', { mensaje: 'Nuevo curso agregado' });
         res.json({ mensaje: 'Curso recibido' });
@@ -76,11 +81,23 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
     }
 });
 
+// Endpoint para servir imágenes desde GridFS
+app.get('/api/imagen/:nombre', async (req, res) => {
+    try {
+        const nombre = req.params.nombre;
+        const downloadStream = gfs.openDownloadStreamByName(nombre);
+        downloadStream.on('error', () => res.status(404).json({ error: 'Imagen no encontrada' }));
+        res.set('Content-Type', 'image/jpeg'); // O puedes detectar el tipo
+        downloadStream.pipe(res);
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener la imagen' });
+    }
+});
+
 // Obtener cursos desde MongoDB
 app.get('/api/cursos', async (req, res) => {
     try {
         const cursos = await cursosCol.find({}).toArray();
-        // Agregar un id string para frontend
         cursos.forEach(c => c.id = c._id.toString());
         res.json(cursos);
     } catch (err) {
@@ -158,7 +175,7 @@ app.delete('/api/curso/:id', async (req, res) => {
     }
 });
 
-// Editar curso por ID
+// Editar curso por ID (no actualiza imágenes en este ejemplo)
 app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
     try {
         const id = req.params.id;
@@ -166,10 +183,6 @@ app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
         let pasos = [];
         if (req.body.pasos) {
             pasos = JSON.parse(req.body.pasos);
-            pasos = pasos.map(p => ({
-                ...p,
-                imagen: p.imagen ? `/uploads/${p.imagen}` : null
-            }));
         }
         const result = await cursosCol.updateOne(
             { _id: new ObjectId(id) },
@@ -185,25 +198,14 @@ app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
     }
 });
 
-// Servir imágenes
-app.use('/uploads', express.static(uploadsDir));
-
-// Servir archivos estáticos del frontend de usuarios en /app
-app.use('/app', express.static(path.join(__dirname, '../frontend_usuario')));
-
-// Servir archivos estáticos del frontend de administración
-app.use(express.static(path.join(__dirname, '../frontend')));
-
 // Socket.IO conexión
 io.on('connection', (socket) => {
     console.log('Cliente conectado vía Socket.IO');
-    // Puedes agregar más eventos aquí si lo necesitas
 });
 
-// --- Configuración de puerto y host para Render y móviles ---
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const HOST = '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
-    console.log(`Servidor backend iniciado en puerto ${PORT}`);
+    console.log(`Servidor backend GridFS iniciado en puerto ${PORT}`);
 });
