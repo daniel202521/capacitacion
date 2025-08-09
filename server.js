@@ -89,13 +89,26 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
 });
 
 // Endpoint para servir imágenes desde GridFS
+
+// Preflight para CORS (por si el navegador lo solicita)
+app.options('/api/imagen/:nombre', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.sendStatus(204);
+});
+
 app.get('/api/imagen/:nombre', async (req, res) => {
     try {
         const nombre = req.params.nombre;
         // Buscar el archivo en GridFS para obtener el contentType
         const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
         if (!files || files.length === 0) {
-            return res.status(404).json({ error: 'Imagen no encontrada' });
+            // 404 sin body ni Content-Type JSON para evitar CORB
+            res.set('Access-Control-Allow-Origin', '*');
+            res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            return res.sendStatus(404);
         }
         const file = files[0];
         // Setear CORS headers manualmente para imágenes
@@ -105,10 +118,19 @@ app.get('/api/imagen/:nombre', async (req, res) => {
         // Setear el Content-Type real
         res.set('Content-Type', file.contentType || 'application/octet-stream');
         const downloadStream = gfs.openDownloadStreamByName(nombre);
-        downloadStream.on('error', () => res.status(404).json({ error: 'Imagen no encontrada' }));
+        downloadStream.on('error', () => {
+            res.set('Access-Control-Allow-Origin', '*');
+            res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            res.sendStatus(404);
+        });
         downloadStream.pipe(res);
     } catch (err) {
-        res.status(500).json({ error: 'Error al obtener la imagen' });
+        // 500 sin body para evitar CORB
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.sendStatus(500);
     }
 });
 
