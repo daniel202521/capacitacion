@@ -68,10 +68,17 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
         }
         if (req.body.pasos) {
             pasos = JSON.parse(req.body.pasos);
-            pasos = pasos.map(p => ({
-                ...p,
-                imagen: p.imagen && imagenesMap[p.imagen] ? imagenesMap[p.imagen] : null
-            }));
+            pasos = pasos.map(p => {
+                let imagenNombre = p.imagen;
+                // Si la imagen tiene una ruta (ej: uploads/archivo.jpg), extraer solo el nombre
+                if (typeof imagenNombre === 'string' && imagenNombre.includes('/')) {
+                    imagenNombre = imagenNombre.split('/').pop();
+                }
+                return {
+                    ...p,
+                    imagen: imagenNombre && imagenesMap[imagenNombre] ? imagenNombre : null
+                };
+            });
         }
         await cursosCol.insertOne({ titulo, descripcion, pasos });
         io.emit('nuevoCurso', { mensaje: 'Nuevo curso agregado' });
