@@ -44,14 +44,14 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Guardar curso y pasos en MongoDB y guardar imágenes en GridFS
+// Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
 app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
     try {
         const { titulo, descripcion } = req.body;
         let pasos = [];
-        let imagenesMap = {};
+        let archivosMap = {};
         if (req.files && req.files.length > 0) {
-            // Guardar cada imagen en GridFS
+            // Guardar cada archivo (imagen o video) en GridFS
             for (const file of req.files) {
                 const bufferStream = new stream.PassThrough();
                 bufferStream.end(file.buffer);
@@ -63,20 +63,19 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
                         .on('error', reject)
                         .on('finish', resolve);
                 });
-                imagenesMap[file.originalname] = file.originalname;
+                archivosMap[file.originalname] = file.originalname;
             }
         }
         if (req.body.pasos) {
             pasos = JSON.parse(req.body.pasos);
             pasos = pasos.map(p => {
-                let imagenNombre = p.imagen;
-                // Si la imagen tiene una ruta (ej: uploads/archivo.jpg), extraer solo el nombre
-                if (typeof imagenNombre === 'string' && imagenNombre.includes('/')) {
-                    imagenNombre = imagenNombre.split('/').pop();
+                let archivoNombre = p.imagen;
+                if (typeof archivoNombre === 'string' && archivoNombre.includes('/')) {
+                    archivoNombre = archivoNombre.split('/').pop();
                 }
                 return {
                     ...p,
-                    imagen: imagenNombre && imagenesMap[imagenNombre] ? imagenNombre : null
+                    imagen: archivoNombre && archivosMap[archivoNombre] ? archivoNombre : null
                 };
             });
         }
@@ -88,48 +87,58 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
     }
 });
 
-// Endpoint para servir imágenes desde GridFS
-
-// Preflight para CORS (por si el navegador lo solicita)
+// Endpoint para servir imágenes o videos desde GridFS (con soporte de Range para videos)
 app.options('/api/imagen/:nombre', (req, res) => {
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
     res.sendStatus(204);
 });
 
 app.get('/api/imagen/:nombre', async (req, res) => {
     try {
         const nombre = req.params.nombre;
-        // Buscar el archivo en GridFS para obtener el contentType
         const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
         if (!files || files.length === 0) {
-            // 404 sin body ni Content-Type JSON para evitar CORB
             res.set('Access-Control-Allow-Origin', '*');
             res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
             return res.sendStatus(404);
         }
         const file = files[0];
-        // Setear CORS headers manualmente para imágenes
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-        // Setear el Content-Type real
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+        res.set('Accept-Ranges', 'bytes');
         res.set('Content-Type', file.contentType || 'application/octet-stream');
-        const downloadStream = gfs.openDownloadStreamByName(nombre);
-        downloadStream.on('error', () => {
-            res.set('Access-Control-Allow-Origin', '*');
-            res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-            res.sendStatus(404);
-        });
-        downloadStream.pipe(res);
+
+        // Soporte para streaming de video (Range requests)
+        const range = req.headers.range;
+        if (range && /^bytes=/.test(range)) {
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
+            const chunkSize = (end - start) + 1;
+            res.status(206);
+            res.set('Content-Range', `bytes ${start}-${end}/${file.length}`);
+            res.set('Content-Length', chunkSize);
+            const downloadStream = gfs.openDownloadStreamByName(nombre, { start, end: end + 1 });
+            downloadStream.on('error', () => {
+                res.sendStatus(404);
+            });
+            downloadStream.pipe(res);
+        } else {
+            res.set('Content-Length', file.length);
+            const downloadStream = gfs.openDownloadStreamByName(nombre);
+            downloadStream.on('error', () => {
+                res.sendStatus(404);
+            });
+            downloadStream.pipe(res);
+        }
     } catch (err) {
-        // 500 sin body para evitar CORB
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
         res.sendStatus(500);
     }
 });
@@ -215,14 +224,40 @@ app.delete('/api/curso/:id', async (req, res) => {
     }
 });
 
-// Editar curso por ID (no actualiza imágenes en este ejemplo)
+// Editar curso por ID (ahora también permite actualizar imágenes/videos)
 app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
     try {
         const id = req.params.id;
         const { titulo, descripcion } = req.body;
         let pasos = [];
+        let archivosMap = {};
+        if (req.files && req.files.length > 0) {
+            for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                archivosMap[file.originalname] = file.originalname;
+            }
+        }
         if (req.body.pasos) {
             pasos = JSON.parse(req.body.pasos);
+            pasos = pasos.map(p => {
+                let archivoNombre = p.imagen;
+                if (typeof archivoNombre === 'string' && archivoNombre.includes('/')) {
+                    archivoNombre = archivoNombre.split('/').pop();
+                }
+                return {
+                    ...p,
+                    imagen: archivoNombre && archivosMap[archivoNombre] ? archivoNombre : archivoNombre || null
+                };
+            });
         }
         const result = await cursosCol.updateOne(
             { _id: new ObjectId(id) },
