@@ -5,6 +5,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
 const stream = require('stream');
+const axios = require('axios'); // Agrega axios para llamadas HTTP
 
 const app = express();
 const server = http.createServer(app);
@@ -270,6 +271,34 @@ app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
         }
     } catch (err) {
         res.status(500).json({ error: 'Error al editar el curso' });
+    }
+});
+
+// --- API OpenAI Chatbot ---
+const OPENAI_API_KEY = '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';
+
+app.post('/api/chat', async (req, res) => {
+    const { mensaje } = req.body;
+    if (!mensaje) return res.status(400).json({ error: 'Mensaje requerido' });
+    try {
+        const response = await axios.post(
+            'https://api.openai.com/v1/chat/completions',
+            {
+                model: 'gpt-3.5-turbo',
+                messages: [{ role: 'user', content: mensaje }],
+                max_tokens: 100
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${OPENAI_API_KEY}`,
+                    'Content-Type': 'application/json'
+                }
+            }
+        );
+        const texto = response.data.choices[0].message.content;
+        res.json({ respuesta: texto });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al consultar OpenAI' });
     }
 });
 
