@@ -275,7 +275,7 @@ app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
 });
 
 // --- API OpenAI Chatbot ---
-const OPENAI_API_KEY = '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';
+const OPENAI_API_KEY = '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';
 
 app.post('/api/chat', async (req, res) => {
     const { mensaje } = req.body;
