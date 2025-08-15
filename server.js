@@ -313,3 +313,18 @@ const HOST = '0.0.0.0';
 server.listen(PORT, HOST, () => {
     console.log(`Servidor backend GridFS iniciado en puerto ${PORT}`);
 });
+
+// Recuperar contraseña (ahora actualiza la contraseña directamente)
+app.post('/api/recuperar-password', async (req, res) => {
+    const { usuario, nuevaPassword } = req.body;
+    if (!usuario || !nuevaPassword) return res.status(400).json({ error: 'Usuario y nueva contraseña requeridos' });
+    try {
+        const user = await usuariosCol.findOne({ usuario });
+        if (!user) return res.status(404).json({ error: 'Usuario no encontrado' });
+        await usuariosCol.updateOne({ usuario }, { $set: { password: nuevaPassword } });
+        res.json({ mensaje: 'Contraseña actualizada correctamente.' });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al actualizar la contraseña' });
+    }
+});
+
