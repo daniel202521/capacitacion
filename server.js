@@ -46,14 +46,37 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
-app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
+app.post('/api/curso', upload.fields([
+    { name: 'imagenes' },
+    { name: 'portada', maxCount: 1 }
+]), async (req, res) => {
     try {
-        const { titulo, descripcion } = req.body;
+        const { titulo, descripcion, portadaNombre } = req.body;
         let pasos = [];
         let archivosMap = {};
-        if (req.files && req.files.length > 0) {
-            // Guardar cada archivo (imagen o video) en GridFS
-            for (const file of req.files) {
+        let portada = null;
+
+        // Guardar portada en GridFS si existe
+        if (req.files && req.files['portada'] && req.files['portada'][0]) {
+            const portadaFile = req.files['portada'][0];
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(portadaFile.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(portadaFile.originalname, {
+                    contentType: portadaFile.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            portada = portadaFile.originalname;
+        } else if (portadaNombre) {
+            portada = portadaNombre;
+        }
+
+        // Guardar imágenes/videos de pasos en GridFS
+        if (req.files && req.files['imagenes']) {
+            for (const file of req.files['imagenes']) {
                 const bufferStream = new stream.PassThrough();
                 bufferStream.end(file.buffer);
                 await new Promise((resolve, reject) => {
@@ -67,6 +90,7 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
                 archivosMap[file.originalname] = file.originalname;
             }
         }
+
         if (req.body.pasos) {
             pasos = JSON.parse(req.body.pasos);
             pasos = pasos.map(p => {
@@ -80,7 +104,8 @@ app.post('/api/curso', upload.array('imagenes'), async (req, res) => {
                 };
             });
         }
-        await cursosCol.insertOne({ titulo, descripcion, pasos });
+
+        await cursosCol.insertOne({ titulo, descripcion, portada, pasos });
         io.emit('nuevoCurso', { mensaje: 'Nuevo curso agregado' });
         res.json({ mensaje: 'Curso recibido' });
     } catch (err) {
@@ -225,15 +250,37 @@ app.delete('/api/curso/:id', async (req, res) => {
     }
 });
 
-// Editar curso por ID (ahora también permite actualizar imágenes/videos)
-app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
+// Editar curso por ID (ahora también permite actualizar portada)
+app.put('/api/curso/:id', upload.fields([
+    { name: 'imagenes' },
+    { name: 'portada', maxCount: 1 }
+]), async (req, res) => {
     try {
         const id = req.params.id;
-        const { titulo, descripcion } = req.body;
+        const { titulo, descripcion, portadaNombre } = req.body;
         let pasos = [];
         let archivosMap = {};
-        if (req.files && req.files.length > 0) {
-            for (const file of req.files) {
+        let portada = portadaNombre || null;
+
+        // Guardar portada en GridFS si existe
+        if (req.files && req.files['portada'] && req.files['portada'][0]) {
+            const portadaFile = req.files['portada'][0];
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(portadaFile.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(portadaFile.originalname, {
+                    contentType: portadaFile.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            portada = portadaFile.originalname;
+        }
+
+        // Guardar imágenes/videos de pasos en GridFS
+        if (req.files && req.files['imagenes']) {
+            for (const file of req.files['imagenes']) {
                 const bufferStream = new stream.PassThrough();
                 bufferStream.end(file.buffer);
                 await new Promise((resolve, reject) => {
@@ -247,6 +294,7 @@ app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
                 archivosMap[file.originalname] = file.originalname;
             }
         }
+
         if (req.body.pasos) {
             pasos = JSON.parse(req.body.pasos);
             pasos = pasos.map(p => {
@@ -260,9 +308,10 @@ app.put('/api/curso/:id', upload.array('imagenes'), async (req, res) => {
                 };
             });
         }
+
         const result = await cursosCol.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { titulo, descripcion, pasos } }
+            { $set: { titulo, descripcion, portada, pasos } }
         );
         if (result.matchedCount === 1) {
             res.json({ mensaje: 'Curso editado' });
