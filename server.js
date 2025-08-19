@@ -51,7 +51,7 @@ app.post('/api/curso', upload.fields([
     { name: 'portada', maxCount: 1 }
 ]), async (req, res) => {
     try {
-        const { titulo, descripcion, portadaNombre } = req.body;
+        const { titulo, descripcion, portadaNombre, categoria } = req.body; // <-- agrega categoria
         let pasos = [];
         let archivosMap = {};
         let portada = null;
@@ -104,8 +104,8 @@ app.post('/api/curso', upload.fields([
                 };
             });
         }
-
-        await cursosCol.insertOne({ titulo, descripcion, portada, pasos });
+        // --- Guarda la categoría en el documento ---
+        await cursosCol.insertOne({ titulo, descripcion, portada, categoria, pasos });
         io.emit('nuevoCurso', { mensaje: 'Nuevo curso agregado' });
         res.json({ mensaje: 'Curso recibido' });
     } catch (err) {
@@ -172,7 +172,12 @@ app.get('/api/imagen/:nombre', async (req, res) => {
 // Obtener cursos desde MongoDB
 app.get('/api/cursos', async (req, res) => {
     try {
-        const cursos = await cursosCol.find({}).toArray();
+        // --- Permite filtrar por categoría desde query string ---
+        const filtro = {};
+        if (req.query.categoria) {
+            filtro.categoria = req.query.categoria;
+        }
+        const cursos = await cursosCol.find(filtro).toArray();
         cursos.forEach(c => c.id = c._id.toString());
         res.json(cursos);
     } catch (err) {
@@ -257,7 +262,7 @@ app.put('/api/curso/:id', upload.fields([
 ]), async (req, res) => {
     try {
         const id = req.params.id;
-        const { titulo, descripcion, portadaNombre } = req.body;
+        const { titulo, descripcion, portadaNombre, categoria } = req.body; // <-- agrega categoria
         let pasos = [];
         let archivosMap = {};
         let portada = portadaNombre || null;
@@ -308,10 +313,10 @@ app.put('/api/curso/:id', upload.fields([
                 };
             });
         }
-
+        // --- Actualiza también la categoría ---
         const result = await cursosCol.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { titulo, descripcion, portada, pasos } }
+            { $set: { titulo, descripcion, portada, categoria, pasos } }
         );
         if (result.matchedCount === 1) {
             res.json({ mensaje: 'Curso editado' });
@@ -376,4 +381,3 @@ app.post('/api/recuperar-password', async (req, res) => {
         res.status(500).json({ error: 'Error al actualizar la contraseña' });
     }
 });
-
