@@ -568,3 +568,19 @@ app.get('/api/sitio/:id/tickets', async (req, res) => {
         res.status(500).json({ error: 'Error al obtener tickets' });
     }
 });
+
+// Eliminar sitio por ID
+app.delete('/api/sitio/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 1) {
+            io.emit('sitioEliminado', { id });
+            res.json({ mensaje: 'Sitio eliminado' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar el sitio' });
+    }
+});
