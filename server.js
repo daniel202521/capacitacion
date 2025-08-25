@@ -473,3 +473,86 @@ app.get('/api/sitio/:id/equipos', async (req, res) => {
         res.status(500).json({ error: 'Error al obtener equipos' });
     }
 });
+
+// Guardar ticket y evidencias fotográficas para un sitio
+app.post('/api/sitio/:id/ticket', upload.array('fotos'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { tipo, descripcion } = req.body;
+        if (!tipo || !descripcion) return res.status(400).json({ error: 'Faltan datos' });
+
+        // Guardar imágenes en GridFS y obtener URLs
+        let evidencias = [];
+        if (req.files && req.files.length > 0) {
+            for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                evidencias.push({
+                    nombre: file.originalname,
+                    url: `/api/imagen/${file.originalname}`
+                });
+            }
+        }
+
+        // Construir ticket
+        const ticket = {
+            tipo,
+            descripcion,
+            evidencias,
+            fecha: new Date()
+        };
+
+        // Guardar ticket en el sitio
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { tickets: ticket } }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Ticket guardado', ticket });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al guardar ticket' });
+    }
+});
+
+// Obtener evidencias fotográficas previas de un sitio (devuelve todas las evidencias de todos los tickets)
+app.get('/api/sitio/:id/evidencias', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        let evidencias = [];
+        if (Array.isArray(sitio.tickets)) {
+            sitio.tickets.forEach(ticket => {
+                if (Array.isArray(ticket.evidencias)) {
+                    evidencias = evidencias.concat(ticket.evidencias);
+                }
+            });
+        }
+        res.json({ evidencias });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener evidencias' });
+    }
+});
+
+// Opcional: obtener todos los tickets de un sitio
+app.get('/api/sitio/:id/tickets', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ tickets: sitio.tickets || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener tickets' });
+    }
+});
