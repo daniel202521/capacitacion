@@ -601,3 +601,38 @@ app.delete('/api/sitio/:id', async (req, res) => {
         res.status(500).json({ error: 'Error al eliminar el sitio' });
     }
 });
+
+// Actualizar estado de un ticket (reabrir o terminar)
+app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { estado, motivoNoTerminado, evidenciaEscrita } = req.body;
+        if (!estado || isNaN(ticketIdx)) return res.status(400).json({ error: 'Faltan datos' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        // Actualiza el estado y motivo si corresponde
+        const updateFields = {
+            [`tickets.${ticketIdx}.estado`]: estado
+        };
+        if (estado === 'en_curso') {
+            updateFields[`tickets.${ticketIdx}.motivoNoTerminado`] = motivoNoTerminado || '';
+            updateFields[`tickets.${ticketIdx}.evidenciaEscrita`] = evidenciaEscrita || '';
+        } else {
+            updateFields[`tickets.${ticketIdx}.motivoNoTerminado`] = '';
+            updateFields[`tickets.${ticketIdx}.evidenciaEscrita`] = '';
+        }
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+        res.json({ mensaje: 'Ticket actualizado' });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al actualizar el ticket' });
+    }
+});
