@@ -869,3 +869,77 @@ app.delete('/api/sitio/:id/eliminar-con-codigo', async (req, res) => {
         res.status(500).json({ error: 'Error al eliminar el sitio' });
     }
 });
+
+// Marcar un sitio como "sitio de trabajo" (sin equipos)
+app.post('/api/sitio/:id/marcar-trabajo', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { esSitioTrabajo: true } }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Sitio marcado como sitio de trabajo' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al marcar sitio de trabajo' });
+    }
+});
+
+// Subir evidencia de trabajo realizado en sitio de trabajo
+app.post('/api/sitio/:id/trabajo', require('multer')().any(), async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { descripcion } = req.body;
+        if (!descripcion) return res.status(400).json({ error: 'Descripción requerida' });
+
+        // Procesar fotos
+        let fotos = [];
+        if (req.files && req.files.length > 0) {
+            for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                fotos.push({
+                    nombre: file.originalname,
+                    url: `/api/imagen/${file.originalname}`
+                });
+            }
+        }
+
+        // Guarda la evidencia en el sitio
+        const evidencia = {
+            descripcion,
+            fotos,
+            fecha: new Date()
+        };
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { evidenciasTrabajo: evidencia } }
+        );
+        res.json({ mensaje: 'Evidencia de trabajo guardada', evidencia });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al guardar evidencia de trabajo' });
+    }
+});
+
+// Consultar evidencias de trabajo de un sitio de trabajo
+app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ evidenciasTrabajo: sitio.evidenciasTrabajo || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener evidencias de trabajo' });
+    }
+});
