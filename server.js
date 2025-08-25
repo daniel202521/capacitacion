@@ -486,14 +486,15 @@ app.get('/api/sitio/:id/equipos', async (req, res) => {
 });
 
 // Guardar ticket y evidencias fotográficas para un sitio
-app.post('/api/sitio/:id/ticket', upload.array('fotos'), async (req, res) => {
+app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
     try {
         const id = req.params.id;
-        const { tipo, descripcion } = req.body;
-        if (!tipo || !descripcion) return res.status(400).json({ error: 'Faltan datos' });
+        const { tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita } = req.body;
+        if (!tipo || !descripcion || !estado) return res.status(400).json({ error: 'Faltan datos' });
 
-        // Guardar imágenes en GridFS y obtener URLs
+        // Procesar archivos
         let evidencias = [];
+        let evidenciasNoTerminado = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
                 const bufferStream = new stream.PassThrough();
@@ -506,10 +507,18 @@ app.post('/api/sitio/:id/ticket', upload.array('fotos'), async (req, res) => {
                         .on('error', reject)
                         .on('finish', resolve);
                 });
-                evidencias.push({
-                    nombre: file.originalname,
-                    url: `/api/imagen/${file.originalname}`
-                });
+                // Clasifica por campo
+                if (file.fieldname === 'fotosNoTerminado') {
+                    evidenciasNoTerminado.push({
+                        nombre: file.originalname,
+                        url: `/api/imagen/${file.originalname}`
+                    });
+                } else {
+                    evidencias.push({
+                        nombre: file.originalname,
+                        url: `/api/imagen/${file.originalname}`
+                    });
+                }
             }
         }
 
@@ -517,9 +526,17 @@ app.post('/api/sitio/:id/ticket', upload.array('fotos'), async (req, res) => {
         const ticket = {
             tipo,
             descripcion,
+            estado,
             evidencias,
             fecha: new Date()
         };
+
+        // Si está en curso, agrega motivo y evidencias de no terminado
+        if (estado === 'en_curso') {
+            ticket.motivoNoTerminado = motivoNoTerminado || '';
+            ticket.evidenciaEscrita = evidenciaEscrita || '';
+            ticket.evidenciasNoTerminado = evidenciasNoTerminado;
+        }
 
         // Guardar ticket en el sitio
         const result = await sitiosCol.updateOne(
