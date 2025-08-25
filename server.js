@@ -51,6 +51,19 @@ app.post('/api/curso', upload.fields([
     { name: 'portada', maxCount: 1 }
 ]), async (req, res) => {
     try {
+        // Si el body es JSON simple (solo titulo y descripcion)
+        if (req.body.titulo && req.body.descripcion && !req.body.pasos) {
+            await cursosCol.insertOne({
+                titulo: req.body.titulo,
+                descripcion: req.body.descripcion,
+                portada: null,
+                categoria: null,
+                pasos: []
+            });
+            io.emit('nuevoCurso', { mensaje: 'Nuevo curso agregado' });
+            return res.json({ mensaje: 'Sitio guardado' });
+        }
+
         const { titulo, descripcion, portadaNombre, categoria } = req.body; // <-- agrega categoria
         let pasos = [];
         let archivosMap = {};
@@ -379,5 +392,27 @@ app.post('/api/recuperar-password', async (req, res) => {
         res.json({ mensaje: 'Contraseña actualizada correctamente.' });
     } catch (err) {
         res.status(500).json({ error: 'Error al actualizar la contraseña' });
+    }
+});
+
+// Guardar equipos instalados en un sitio/curso
+app.post('/api/curso/:id/equipos', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { equipos } = req.body;
+        if (!Array.isArray(equipos) || equipos.length === 0) {
+            return res.status(400).json({ error: 'No se recibieron equipos' });
+        }
+        const result = await cursosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { equipos } }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Equipos guardados' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al guardar equipos' });
     }
 });
