@@ -718,3 +718,18 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         res.status(500).json({ error: 'Error al terminar el ticket' });
     }
 });
+// Verificar sesión de usuario
+app.post('/api/verificar-sesion', async (req, res) => {
+    const { usuario } = req.body;
+    if (!usuario) return res.status(400).json({ valida: false, error: 'Usuario requerido' });
+    try {
+        const user = await usuariosCol.findOne({ usuario });
+        if (user) {
+            res.json({ valida: true });
+        } else {
+            res.json({ valida: false });
+        }
+    } catch (err) {
+        res.status(500).json({ valida: false, error: 'Error al verificar sesión' });
+    }
+});
