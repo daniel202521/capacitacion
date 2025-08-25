@@ -828,3 +828,44 @@ app.get('/api/sitio/:id/material', async (req, res) => {
         res.status(500).json({ error: 'Error al obtener material' });
     }
 });
+
+// Eliminar material específico de un sitio
+app.delete('/api/sitio/:id/material/:nombre', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const nombre = req.params.nombre;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        const material = Array.isArray(sitio.material) ? sitio.material : [];
+        const nuevoMaterial = material.filter(m => m.nombre !== nombre);
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { material: nuevoMaterial } }
+        );
+        res.json({ mensaje: 'Material eliminado' });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar material' });
+    }
+});
+
+// Eliminar sitio solo si el código maestro es correcto
+app.delete('/api/sitio/:id/eliminar-con-codigo', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { codigoMaestro } = req.body;
+        // Cambia este valor por tu código maestro real
+        const CODIGO_MAESTRO = '131718';
+        if (codigoMaestro !== CODIGO_MAESTRO) {
+            return res.status(403).json({ error: 'Código maestro incorrecto' });
+        }
+        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 1) {
+            io.emit('sitioEliminado', { id });
+            res.json({ mensaje: 'Sitio eliminado' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar el sitio' });
+    }
+});
