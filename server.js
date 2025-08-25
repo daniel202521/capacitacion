@@ -636,3 +636,32 @@ app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
         res.status(500).json({ error: 'Error al actualizar el ticket' });
     }
 });
+
+// Registrar nueva visita en un ticket
+app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { comentario, evidenciaEscrita } = req.body;
+        if (isNaN(ticketIdx)) return res.status(400).json({ error: 'Ticket inválido' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        const visita = {
+            fecha: new Date(),
+            comentario: comentario || '',
+            evidenciaEscrita: evidenciaEscrita || ''
+        };
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { [`tickets.${ticketIdx}.visitas`]: visita } }
+        );
+        res.json({ mensaje: 'Visita registrada', visita });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al registrar visita' });
+    }
+});
