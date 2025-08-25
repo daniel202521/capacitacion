@@ -718,6 +718,7 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         res.status(500).json({ error: 'Error al terminar el ticket' });
     }
 });
+
 // Verificar sesión de usuario
 app.post('/api/verificar-sesion', async (req, res) => {
     const { usuario } = req.body;
@@ -731,5 +732,52 @@ app.post('/api/verificar-sesion', async (req, res) => {
         }
     } catch (err) {
         res.status(500).json({ valida: false, error: 'Error al verificar sesión' });
+    }
+});
+
+// Subir planos/imágenes de un sitio
+app.post('/api/sitio/:id/planos', upload.array('planos'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'No se enviaron archivos' });
+        }
+        let planos = [];
+        for (const file of req.files) {
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(file.originalname, {
+                    contentType: file.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            planos.push({
+                nombre: file.originalname,
+                url: `/api/imagen/${file.originalname}`
+            });
+        }
+        // Guarda los planos en el sitio
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { planos: { $each: planos } } }
+        );
+        res.json({ mensaje: 'Planos subidos', planos });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al subir planos' });
+    }
+});
+
+// Obtener planos/imágenes de un sitio
+app.get('/api/sitio/:id/planos', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ planos: sitio.planos || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener planos' });
     }
 });
