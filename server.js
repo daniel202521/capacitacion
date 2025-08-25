@@ -247,6 +247,7 @@ app.delete('/api/curso/:id', async (req, res) => {
         const id = req.params.id;
         const result = await cursosCol.deleteOne({ _id: new ObjectId(id) });
         if (result.deletedCount === 1) {
+            io.emit('cursoEliminado', { id });
             res.json({ mensaje: 'Curso eliminado' });
         } else {
             res.status(404).json({ error: 'Curso no encontrado' });
@@ -320,6 +321,7 @@ app.put('/api/curso/:id', upload.fields([
             { $set: { titulo, descripcion, portada, categoria, pasos } }
         );
         if (result.matchedCount === 1) {
+            io.emit('cursoEditado', { id, titulo, descripcion, categoria });
             res.json({ mensaje: 'Curso editado' });
         } else {
             res.status(404).json({ error: 'Curso no encontrado' });
@@ -360,6 +362,13 @@ app.post('/api/chat', async (req, res) => {
 // Socket.IO conexión
 io.on('connection', (socket) => {
     console.log('Cliente conectado vía Socket.IO');
+    // Opcional: puedes escuchar eventos del frontend aquí si quieres
+    // socket.on('crearCurso', async (data) => { ... });
+    // socket.on('eliminarCurso', async (data) => { ... });
+    // socket.on('editarCurso', async (data) => { ... });
+    // socket.on('crearSitio', async (data) => { ... });
+    // socket.on('editarSitio', async (data) => { ... });
+    // socket.on('eliminarSitio', async (data) => { ... });
 });
 
 const PORT = process.env.PORT || 3001;
@@ -396,6 +405,7 @@ app.post('/api/curso/:id/equipos', async (req, res) => {
             { $set: { equipos } }
         );
         if (result.matchedCount === 1) {
+            io.emit('equiposActualizados', { sitioId: id });
             res.json({ mensaje: 'Equipos guardados' });
         } else {
             res.status(404).json({ error: 'Curso no encontrado' });
@@ -423,6 +433,7 @@ app.post('/api/sitio', async (req, res) => {
         const { titulo, descripcion } = req.body;
         if (!titulo || !descripcion) return res.status(400).json({ error: 'Faltan datos' });
         const result = await sitiosCol.insertOne({ titulo, descripcion });
+        io.emit('sitioAgregado', { id: result.insertedId, titulo, descripcion });
         res.json({ mensaje: 'Sitio guardado', id: result.insertedId });
     } catch (err) {
         res.status(500).json({ error: 'Error al guardar sitio' });
@@ -516,6 +527,7 @@ app.post('/api/sitio/:id/ticket', upload.array('fotos'), async (req, res) => {
             { $push: { tickets: ticket } }
         );
         if (result.matchedCount === 1) {
+            io.emit('ticketAgregado', { sitioId: id, ticket });
             res.json({ mensaje: 'Ticket guardado', ticket });
         } else {
             res.status(404).json({ error: 'Sitio no encontrado' });
