@@ -665,3 +665,56 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
         res.status(500).json({ error: 'Error al registrar visita' });
     }
 });
+
+// Marcar ticket como terminado y guardar evidencia escrita/fotográfica en la visita final
+app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { evidenciaEscrita, estado } = req.body;
+        if (isNaN(ticketIdx) || estado !== 'terminado') return res.status(400).json({ error: 'Datos inválidos' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        // Procesar imágenes
+        let evidencias = [];
+        if (req.files && req.files.length > 0) {
+            for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                evidencias.push({
+                    nombre: file.originalname,
+                    url: `/api/imagen/${file.originalname}`
+                });
+            }
+        }
+
+        // Actualiza el ticket
+        const updateFields = {
+            [`tickets.${ticketIdx}.estado`]: 'terminado',
+            [`tickets.${ticketIdx}.evidenciaEscrita`]: evidenciaEscrita || '',
+        };
+        if (evidencias.length > 0) {
+            updateFields[`tickets.${ticketIdx}.evidenciasFinal`] = evidencias;
+        }
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+        res.json({ mensaje: 'Ticket marcado como terminado', evidencias });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al terminar el ticket' });
+    }
+});
