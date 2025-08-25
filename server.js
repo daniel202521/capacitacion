@@ -18,13 +18,14 @@ const io = new Server(server, {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, gfs;
+let db, cursosCol, usuariosCol, sitiosCol, gfs;
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
         db = client.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
+        sitiosCol = db.collection('sitios'); // <-- nueva colección
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('Conectado a MongoDB y GridFS');
     })
@@ -411,6 +412,63 @@ app.get('/api/curso/:id/equipos', async (req, res) => {
         const curso = await cursosCol.findOne({ _id: new ObjectId(id) });
         if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
         res.json({ equipos: curso.equipos || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener equipos' });
+    }
+});
+
+// Guardar sitio en MongoDB
+app.post('/api/sitio', async (req, res) => {
+    try {
+        const { titulo, descripcion } = req.body;
+        if (!titulo || !descripcion) return res.status(400).json({ error: 'Faltan datos' });
+        const result = await sitiosCol.insertOne({ titulo, descripcion });
+        res.json({ mensaje: 'Sitio guardado', id: result.insertedId });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al guardar sitio' });
+    }
+});
+
+// Obtener sitios desde MongoDB
+app.get('/api/sitios', async (req, res) => {
+    try {
+        const sitios = await sitiosCol.find({}).toArray();
+        sitios.forEach(s => s.id = s._id.toString());
+        res.json(sitios);
+    } catch (err) {
+        res.status(500).json({ error: 'Error al leer los sitios' });
+    }
+});
+
+// Guardar equipos para un sitio
+app.post('/api/sitio/:id/equipos', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { equipos } = req.body;
+        if (!Array.isArray(equipos) || equipos.length === 0) {
+            return res.status(400).json({ error: 'Equipos requeridos' });
+        }
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { equipos } }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Equipos guardados' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al guardar equipos' });
+    }
+});
+
+// Obtener equipos de un sitio (opcional)
+app.get('/api/sitio/:id/equipos', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ equipos: sitio.equipos || [] });
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener equipos' });
     }
