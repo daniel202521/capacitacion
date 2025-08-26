@@ -489,7 +489,7 @@ app.get('/api/sitio/:id/equipos', async (req, res) => {
 app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
     try {
         const id = req.params.id;
-        const { tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita } = req.body;
+        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita } = req.body;
         if (!tipo || !descripcion || !estado) return res.status(400).json({ error: 'Faltan datos' });
 
         // Procesar archivos
@@ -524,6 +524,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
 
         // Construir ticket
         const ticket = {
+            folio, // <-- agrega el folio aquí
             tipo,
             descripcion,
             estado,
