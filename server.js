@@ -112,13 +112,12 @@ app.post('/api/curso', upload.fields([
 // Obtener cursos desde MongoDB
 app.get('/api/cursos', async (req, res) => {
     try {
-        // --- Permite filtrar por categoría desde query string ---
         const filtro = {};
         if (req.query.categoria) {
             filtro.categoria = req.query.categoria;
         }
         const cursos = await cursosCol.find(filtro).toArray();
-        cursos.forEach(c => c.id = c._id.toString());
+        cursos.forEach(c => c.id = typeof c._id === 'string' ? c._id : (c._id && c._id.toString ? c._id.toString() : ''));
         res.json(cursos);
     } catch (err) {
         res.status(500).json({ error: 'Error al leer los cursos' });
