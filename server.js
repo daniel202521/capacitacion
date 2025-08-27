@@ -3,9 +3,8 @@ const cors = require('cors');
 const multer = require('multer');
 const http = require('http');
 const { Server } = require('socket.io');
-const { MongoClient, ObjectId } = require('mongodb');
-const path = require('path');
-const fs = require('fs');
+const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
+const stream = require('stream');
 const axios = require('axios'); // Agrega axios para llamadas HTTP
 
 const app = express();
@@ -17,42 +16,26 @@ const io = new Server(server, {
 });
 
 // --- MongoDB config ---
-// NUEVA CADENA DE CONEXIÓN PARA AZURE COSMOS DB
-const MONGO_URL = 'mongodb://capacitacion:9xPmxNE3KXsvG5GtaWtemTrdzTNKFlFwb7POLtG1g0oCdz3J3Tn98xYg3M8K8yxGHGz5UH2jEVAoACDbPQD9tA==@capacitacion.mongo.cosmos.azure.com:10255/?ssl=true&retrywrites=false&maxIdleTimeMS=120000&appName=@capacitacion@';
+const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol;
-// Elimina gfs y GridFSBucket
+let db, cursosCol, usuariosCol, sitiosCol, gfs;
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
         db = client.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
-        sitiosCol = db.collection('sitios');
-        console.log('Conectado a Cosmos DB');
+        sitiosCol = db.collection('sitios'); // <-- nueva colección
+        gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
+        console.log('Conectado a MongoDB y GridFS');
     })
     .catch(err => {
-        console.error('Error conectando a Cosmos DB', err);
+        console.error('Error conectando a MongoDB', err);
         process.exit(1);
     });
 
-// --- Cambia multer a guardar en disco ---
-const UPLOADS_DIR = path.join(__dirname, 'uploads');
-if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
-
-const storage = multer.diskStorage({
-    destination: function (req, file, cb) {
-        cb(null, UPLOADS_DIR);
-    },
-    filename: function (req, file, cb) {
-        // Usa nombre original, pero puedes agregar timestamp si quieres evitar duplicados
-        cb(null, Date.now() + '_' + file.originalname);
-    }
-});
+const storage = multer.memoryStorage();
 const upload = multer({ storage });
-
-// Sirve archivos estáticos desde /uploads
-app.use('/api/imagen', express.static(UPLOADS_DIR));
 
 const corsOptions = {
     origin: '*',
@@ -63,28 +46,49 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Guardar curso y pasos en Cosmos DB y guardar imágenes/videos en disco
+// Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
 app.post('/api/curso', upload.fields([
     { name: 'imagenes' },
     { name: 'portada', maxCount: 1 }
 ]), async (req, res) => {
     try {
-        const { titulo, descripcion, portadaNombre, categoria } = req.body;
+        const { titulo, descripcion, portadaNombre, categoria } = req.body; // <-- agrega categoria
         let pasos = [];
         let archivosMap = {};
         let portada = null;
 
-        // Guardar portada en disco si existe
+        // Guardar portada en GridFS si existe
         if (req.files && req.files['portada'] && req.files['portada'][0]) {
-            portada = req.files['portada'][0].filename;
+            const portadaFile = req.files['portada'][0];
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(portadaFile.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(portadaFile.originalname, {
+                    contentType: portadaFile.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            portada = portadaFile.originalname;
         } else if (portadaNombre) {
             portada = portadaNombre;
         }
 
-        // Guardar imágenes/videos de pasos en disco
+        // Guardar imágenes/videos de pasos en GridFS
         if (req.files && req.files['imagenes']) {
             for (const file of req.files['imagenes']) {
-                archivosMap[file.originalname] = file.filename;
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                archivosMap[file.originalname] = file.originalname;
             }
         }
 
@@ -97,10 +101,11 @@ app.post('/api/curso', upload.fields([
                 }
                 return {
                     ...p,
-                    imagen: archivoNombre && archivosMap[archivoNombre] ? archivosMap[archivoNombre] : null
+                    imagen: archivoNombre && archivosMap[archivoNombre] ? archivoNombre : null
                 };
             });
         }
+        // --- Guarda la categoría en el documento ---
         await cursosCol.insertOne({ titulo, descripcion, portada, categoria, pasos });
         io.emit('nuevoCurso', { mensaje: 'Nuevo curso agregado' });
         res.json({ mensaje: 'Curso recibido' });
@@ -109,15 +114,72 @@ app.post('/api/curso', upload.fields([
     }
 });
 
+// Endpoint para servir imágenes o videos desde GridFS (con soporte de Range para videos)
+app.options('/api/imagen/:nombre', (req, res) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+    res.sendStatus(204);
+});
+
+app.get('/api/imagen/:nombre', async (req, res) => {
+    try {
+        const nombre = req.params.nombre;
+        const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
+        if (!files || files.length === 0) {
+            res.set('Access-Control-Allow-Origin', '*');
+            res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+            return res.sendStatus(404);
+        }
+        const file = files[0];
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+        res.set('Accept-Ranges', 'bytes');
+        res.set('Content-Type', file.contentType || 'application/octet-stream');
+
+        // Soporte para streaming de video (Range requests)
+        const range = req.headers.range;
+        if (range && /^bytes=/.test(range)) {
+            const parts = range.replace(/bytes=/, '').split('-');
+            const start = parseInt(parts[0], 10);
+            const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
+            const chunkSize = (end - start) + 1;
+            res.status(206);
+            res.set('Content-Range', `bytes ${start}-${end}/${file.length}`);
+            res.set('Content-Length', chunkSize);
+            const downloadStream = gfs.openDownloadStreamByName(nombre, { start, end: end + 1 });
+            downloadStream.on('error', () => {
+                res.sendStatus(404);
+            });
+            downloadStream.pipe(res);
+        } else {
+            res.set('Content-Length', file.length);
+            const downloadStream = gfs.openDownloadStreamByName(nombre);
+            downloadStream.on('error', () => {
+                res.sendStatus(404);
+            });
+            downloadStream.pipe(res);
+        }
+    } catch (err) {
+        res.set('Access-Control-Allow-Origin', '*');
+        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
+        res.sendStatus(500);
+    }
+});
+
 // Obtener cursos desde MongoDB
 app.get('/api/cursos', async (req, res) => {
     try {
+        // --- Permite filtrar por categoría desde query string ---
         const filtro = {};
         if (req.query.categoria) {
             filtro.categoria = req.query.categoria;
         }
         const cursos = await cursosCol.find(filtro).toArray();
-        cursos.forEach(c => c.id = typeof c._id === 'string' ? c._id : (c._id && c._id.toString ? c._id.toString() : ''));
+        cursos.forEach(c => c.id = c._id.toString());
         res.json(cursos);
     } catch (err) {
         res.status(500).json({ error: 'Error al leer los cursos' });
@@ -183,7 +245,7 @@ app.get('/api/progreso/:usuario', async (req, res) => {
 app.delete('/api/curso/:id', async (req, res) => {
     try {
         const id = req.params.id;
-        const result = await cursosCol.deleteOne({ _id: id });
+        const result = await cursosCol.deleteOne({ _id: new ObjectId(id) });
         if (result.deletedCount === 1) {
             io.emit('cursoEliminado', { id });
             res.json({ mensaje: 'Curso eliminado' });
@@ -207,15 +269,36 @@ app.put('/api/curso/:id', upload.fields([
         let archivosMap = {};
         let portada = portadaNombre || null;
 
-        // Guardar portada en disco si existe
+        // Guardar portada en GridFS si existe
         if (req.files && req.files['portada'] && req.files['portada'][0]) {
-            portada = req.files['portada'][0].filename;
+            const portadaFile = req.files['portada'][0];
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(portadaFile.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(portadaFile.originalname, {
+                    contentType: portadaFile.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            portada = portadaFile.originalname;
         }
 
-        // Guardar imágenes/videos de pasos en disco
+        // Guardar imágenes/videos de pasos en GridFS
         if (req.files && req.files['imagenes']) {
             for (const file of req.files['imagenes']) {
-                archivosMap[file.originalname] = file.filename;
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                archivosMap[file.originalname] = file.originalname;
             }
         }
 
@@ -234,7 +317,7 @@ app.put('/api/curso/:id', upload.fields([
         }
         // --- Actualiza también la categoría ---
         const result = await cursosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: { titulo, descripcion, portada, categoria, pasos } }
         );
         if (result.matchedCount === 1) {
@@ -318,7 +401,7 @@ app.post('/api/curso/:id/equipos', async (req, res) => {
             return res.status(400).json({ error: 'Equipos requeridos' });
         }
         const result = await cursosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: { equipos } }
         );
         if (result.matchedCount === 1) {
@@ -336,7 +419,7 @@ app.post('/api/curso/:id/equipos', async (req, res) => {
 app.get('/api/curso/:id/equipos', async (req, res) => {
     try {
         const id = req.params.id;
-        const curso = await cursosCol.findOne({ _id: id });
+        const curso = await cursosCol.findOne({ _id: new ObjectId(id) });
         if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
         res.json({ equipos: curso.equipos || [] });
     } catch (err) {
@@ -361,7 +444,7 @@ app.post('/api/sitio', async (req, res) => {
 app.get('/api/sitios', async (req, res) => {
     try {
         const sitios = await sitiosCol.find({}).toArray();
-        sitios.forEach(s => s.id = s._id); // _id ya es string
+        sitios.forEach(s => s.id = s._id.toString());
         res.json(sitios);
     } catch (err) {
         res.status(500).json({ error: 'Error al leer los sitios' });
@@ -377,7 +460,7 @@ app.post('/api/sitio/:id/equipos', async (req, res) => {
             return res.status(400).json({ error: 'Equipos requeridos' });
         }
         const result = await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: { equipos } }
         );
         if (result.matchedCount === 1) {
@@ -394,7 +477,7 @@ app.post('/api/sitio/:id/equipos', async (req, res) => {
 app.get('/api/sitio/:id/equipos', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ equipos: sitio.equipos || [] });
     } catch (err) {
@@ -414,16 +497,26 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
         let evidenciasNoTerminado = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
                 // Clasifica por campo
                 if (file.fieldname === 'fotosNoTerminado') {
                     evidenciasNoTerminado.push({
                         nombre: file.originalname,
-                        url: `/api/imagen/${file.filename}`
+                        url: `/api/imagen/${file.originalname}`
                     });
                 } else {
                     evidencias.push({
                         nombre: file.originalname,
-                        url: `/api/imagen/${file.filename}`
+                        url: `/api/imagen/${file.originalname}`
                     });
                 }
             }
@@ -448,7 +541,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
 
         // Guardar ticket en el sitio
         const result = await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $push: { tickets: ticket } }
         );
         if (result.matchedCount === 1) {
@@ -466,7 +559,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
 app.get('/api/sitio/:id/evidencias', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         let evidencias = [];
         if (Array.isArray(sitio.tickets)) {
@@ -486,7 +579,7 @@ app.get('/api/sitio/:id/evidencias', async (req, res) => {
 app.get('/api/sitio/:id/tickets', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ tickets: sitio.tickets || [] });
     } catch (err) {
@@ -498,7 +591,7 @@ app.get('/api/sitio/:id/tickets', async (req, res) => {
 app.delete('/api/sitio/:id', async (req, res) => {
     try {
         const id = req.params.id;
-        const result = await sitiosCol.deleteOne({ _id: id });
+        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
         if (result.deletedCount === 1) {
             io.emit('sitioEliminado', { id });
             res.json({ mensaje: 'Sitio eliminado' });
@@ -518,7 +611,7 @@ app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
         const { estado, motivoNoTerminado, evidenciaEscrita } = req.body;
         if (!estado || isNaN(ticketIdx)) return res.status(400).json({ error: 'Faltan datos' });
 
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
             return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
         }
@@ -536,7 +629,7 @@ app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
         }
 
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: updateFields }
         );
         res.json({ mensaje: 'Ticket actualizado' });
@@ -553,7 +646,7 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
         const { comentario, evidenciaEscrita } = req.body;
         if (isNaN(ticketIdx)) return res.status(400).json({ error: 'Ticket inválido' });
 
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
             return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
         }
@@ -565,7 +658,7 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
         };
 
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $push: { [`tickets.${ticketIdx}.visitas`]: visita } }
         );
         res.json({ mensaje: 'Visita registrada', visita });
@@ -582,7 +675,7 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         const { evidenciaEscrita, estado } = req.body;
         if (isNaN(ticketIdx) || estado !== 'terminado') return res.status(400).json({ error: 'Datos inválidos' });
 
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
             return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
         }
@@ -591,9 +684,19 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         let evidencias = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
                 evidencias.push({
                     nombre: file.originalname,
-                    url: `/api/imagen/${file.filename}`
+                    url: `/api/imagen/${file.originalname}`
                 });
             }
         }
@@ -608,12 +711,28 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         }
 
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: updateFields }
         );
         res.json({ mensaje: 'Ticket marcado como terminado', evidencias });
     } catch (err) {
         res.status(500).json({ error: 'Error al terminar el ticket' });
+    }
+});
+
+// Verificar sesión de usuario
+app.post('/api/verificar-sesion', async (req, res) => {
+    const { usuario } = req.body;
+    if (!usuario) return res.status(400).json({ valida: false, error: 'Usuario requerido' });
+    try {
+        const user = await usuariosCol.findOne({ usuario });
+        if (user) {
+            res.json({ valida: true });
+        } else {
+            res.json({ valida: false });
+        }
+    } catch (err) {
+        res.status(500).json({ valida: false, error: 'Error al verificar sesión' });
     }
 });
 
@@ -626,14 +745,24 @@ app.post('/api/sitio/:id/planos', upload.array('planos'), async (req, res) => {
         }
         let planos = [];
         for (const file of req.files) {
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(file.originalname, {
+                    contentType: file.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
             planos.push({
                 nombre: file.originalname,
-                url: `/api/imagen/${file.filename}`
+                url: `/api/imagen/${file.originalname}`
             });
         }
         // Guarda los planos en el sitio
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $push: { planos: { $each: planos } } }
         );
         res.json({ mensaje: 'Planos subidos', planos });
@@ -646,7 +775,7 @@ app.post('/api/sitio/:id/planos', upload.array('planos'), async (req, res) => {
 app.get('/api/sitio/:id/planos', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ planos: sitio.planos || [] });
     } catch (err) {
@@ -663,14 +792,24 @@ app.post('/api/sitio/:id/material', upload.array('material'), async (req, res) =
         }
         let material = [];
         for (const file of req.files) {
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(file.originalname, {
+                    contentType: file.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
             material.push({
                 nombre: file.originalname,
-                url: `/api/imagen/${file.filename}`
+                url: `/api/imagen/${file.originalname}`
             });
         }
         // Guarda el material en el sitio
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $push: { material: { $each: material } } }
         );
         res.json({ mensaje: 'Material subido', material });
@@ -683,7 +822,7 @@ app.post('/api/sitio/:id/material', upload.array('material'), async (req, res) =
 app.get('/api/sitio/:id/material', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ material: sitio.material || [] });
     } catch (err) {
@@ -696,12 +835,12 @@ app.delete('/api/sitio/:id/material/:nombre', async (req, res) => {
     try {
         const id = req.params.id;
         const nombre = req.params.nombre;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         const material = Array.isArray(sitio.material) ? sitio.material : [];
         const nuevoMaterial = material.filter(m => m.nombre !== nombre);
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: { material: nuevoMaterial } }
         );
         res.json({ mensaje: 'Material eliminado' });
@@ -720,7 +859,7 @@ app.delete('/api/sitio/:id/eliminar-con-codigo', async (req, res) => {
         if (codigoMaestro !== CODIGO_MAESTRO) {
             return res.status(403).json({ error: 'Código maestro incorrecto' });
         }
-        const result = await sitiosCol.deleteOne({ _id: id });
+        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
         if (result.deletedCount === 1) {
             io.emit('sitioEliminado', { id });
             res.json({ mensaje: 'Sitio eliminado' });
@@ -737,7 +876,7 @@ app.post('/api/sitio/:id/marcar-trabajo', async (req, res) => {
     try {
         const id = req.params.id;
         const result = await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: { esSitioTrabajo: true } }
         );
         if (result.matchedCount === 1) {
@@ -751,7 +890,7 @@ app.post('/api/sitio/:id/marcar-trabajo', async (req, res) => {
 });
 
 // Subir evidencia de trabajo realizado en sitio de trabajo
-app.post('/api/sitio/:id/trabajo', upload.any(), async (req, res) => {
+app.post('/api/sitio/:id/trabajo', require('multer')().any(), async (req, res) => {
     try {
         const id = req.params.id;
         const { descripcion } = req.body;
@@ -761,9 +900,19 @@ app.post('/api/sitio/:id/trabajo', upload.any(), async (req, res) => {
         let fotos = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
                 fotos.push({
                     nombre: file.originalname,
-                    url: `/api/imagen/${file.filename}`
+                    url: `/api/imagen/${file.originalname}`
                 });
             }
         }
@@ -775,7 +924,7 @@ app.post('/api/sitio/:id/trabajo', upload.any(), async (req, res) => {
             fecha: new Date()
         };
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $push: { evidenciasTrabajo: evidencia } }
         );
         res.json({ mensaje: 'Evidencia de trabajo guardada', evidencia });
@@ -788,7 +937,7 @@ app.post('/api/sitio/:id/trabajo', upload.any(), async (req, res) => {
 app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ evidenciasTrabajo: sitio.evidenciasTrabajo || [] });
     } catch (err) {
@@ -800,33 +949,17 @@ app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
 app.post('/api/sitio/:id/entregar', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: id });
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         if (sitio.entregado) {
             return res.status(400).json({ error: 'El sitio ya fue entregado' });
         }
         await sitiosCol.updateOne(
-            { _id: id },
+            { _id: new ObjectId(id) },
             { $set: { entregado: true, fechaEntrega: new Date() } }
         );
         res.json({ mensaje: 'Sitio entregado correctamente' });
     } catch (err) {
         res.status(500).json({ error: 'Error al entregar el sitio' });
-    }
-});
-
-// Verificar sesión de usuario
-app.post('/api/verificar-sesion', async (req, res) => {
-    const { usuario } = req.body;
-    if (!usuario) return res.status(400).json({ valida: false, error: 'Usuario requerido' });
-    try {
-        const user = await usuariosCol.findOne({ usuario });
-        if (user) {
-            res.json({ valida: true });
-        } else {
-            res.json({ valida: false });
-        }
-    } catch (err) {
-        res.status(500).json({ valida: false, error: 'Error al verificar sesión' });
     }
 });
