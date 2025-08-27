@@ -184,7 +184,7 @@ app.get('/api/progreso/:usuario', async (req, res) => {
 app.delete('/api/curso/:id', async (req, res) => {
     try {
         const id = req.params.id;
-        const result = await cursosCol.deleteOne({ _id: new ObjectId(id) });
+        const result = await cursosCol.deleteOne({ _id: id });
         if (result.deletedCount === 1) {
             io.emit('cursoEliminado', { id });
             res.json({ mensaje: 'Curso eliminado' });
@@ -235,7 +235,7 @@ app.put('/api/curso/:id', upload.fields([
         }
         // --- Actualiza también la categoría ---
         const result = await cursosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: { titulo, descripcion, portada, categoria, pasos } }
         );
         if (result.matchedCount === 1) {
@@ -319,7 +319,7 @@ app.post('/api/curso/:id/equipos', async (req, res) => {
             return res.status(400).json({ error: 'Equipos requeridos' });
         }
         const result = await cursosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: { equipos } }
         );
         if (result.matchedCount === 1) {
@@ -337,7 +337,7 @@ app.post('/api/curso/:id/equipos', async (req, res) => {
 app.get('/api/curso/:id/equipos', async (req, res) => {
     try {
         const id = req.params.id;
-        const curso = await cursosCol.findOne({ _id: new ObjectId(id) });
+        const curso = await cursosCol.findOne({ _id: id });
         if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
         res.json({ equipos: curso.equipos || [] });
     } catch (err) {
@@ -362,7 +362,7 @@ app.post('/api/sitio', async (req, res) => {
 app.get('/api/sitios', async (req, res) => {
     try {
         const sitios = await sitiosCol.find({}).toArray();
-        sitios.forEach(s => s.id = s._id.toString());
+        sitios.forEach(s => s.id = s._id); // _id ya es string
         res.json(sitios);
     } catch (err) {
         res.status(500).json({ error: 'Error al leer los sitios' });
@@ -378,7 +378,7 @@ app.post('/api/sitio/:id/equipos', async (req, res) => {
             return res.status(400).json({ error: 'Equipos requeridos' });
         }
         const result = await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: { equipos } }
         );
         if (result.matchedCount === 1) {
@@ -395,7 +395,7 @@ app.post('/api/sitio/:id/equipos', async (req, res) => {
 app.get('/api/sitio/:id/equipos', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ equipos: sitio.equipos || [] });
     } catch (err) {
@@ -449,7 +449,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
 
         // Guardar ticket en el sitio
         const result = await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $push: { tickets: ticket } }
         );
         if (result.matchedCount === 1) {
@@ -467,7 +467,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
 app.get('/api/sitio/:id/evidencias', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         let evidencias = [];
         if (Array.isArray(sitio.tickets)) {
@@ -487,7 +487,7 @@ app.get('/api/sitio/:id/evidencias', async (req, res) => {
 app.get('/api/sitio/:id/tickets', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ tickets: sitio.tickets || [] });
     } catch (err) {
@@ -499,7 +499,7 @@ app.get('/api/sitio/:id/tickets', async (req, res) => {
 app.delete('/api/sitio/:id', async (req, res) => {
     try {
         const id = req.params.id;
-        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
+        const result = await sitiosCol.deleteOne({ _id: id });
         if (result.deletedCount === 1) {
             io.emit('sitioEliminado', { id });
             res.json({ mensaje: 'Sitio eliminado' });
@@ -519,7 +519,7 @@ app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
         const { estado, motivoNoTerminado, evidenciaEscrita } = req.body;
         if (!estado || isNaN(ticketIdx)) return res.status(400).json({ error: 'Faltan datos' });
 
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
             return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
         }
@@ -537,7 +537,7 @@ app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
         }
 
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: updateFields }
         );
         res.json({ mensaje: 'Ticket actualizado' });
@@ -554,7 +554,7 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
         const { comentario, evidenciaEscrita } = req.body;
         if (isNaN(ticketIdx)) return res.status(400).json({ error: 'Ticket inválido' });
 
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
             return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
         }
@@ -566,7 +566,7 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
         };
 
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $push: { [`tickets.${ticketIdx}.visitas`]: visita } }
         );
         res.json({ mensaje: 'Visita registrada', visita });
@@ -583,7 +583,7 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         const { evidenciaEscrita, estado } = req.body;
         if (isNaN(ticketIdx) || estado !== 'terminado') return res.status(400).json({ error: 'Datos inválidos' });
 
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
             return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
         }
@@ -609,28 +609,12 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         }
 
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: updateFields }
         );
         res.json({ mensaje: 'Ticket marcado como terminado', evidencias });
     } catch (err) {
         res.status(500).json({ error: 'Error al terminar el ticket' });
-    }
-});
-
-// Verificar sesión de usuario
-app.post('/api/verificar-sesion', async (req, res) => {
-    const { usuario } = req.body;
-    if (!usuario) return res.status(400).json({ valida: false, error: 'Usuario requerido' });
-    try {
-        const user = await usuariosCol.findOne({ usuario });
-        if (user) {
-            res.json({ valida: true });
-        } else {
-            res.json({ valida: false });
-        }
-    } catch (err) {
-        res.status(500).json({ valida: false, error: 'Error al verificar sesión' });
     }
 });
 
@@ -650,7 +634,7 @@ app.post('/api/sitio/:id/planos', upload.array('planos'), async (req, res) => {
         }
         // Guarda los planos en el sitio
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $push: { planos: { $each: planos } } }
         );
         res.json({ mensaje: 'Planos subidos', planos });
@@ -663,7 +647,7 @@ app.post('/api/sitio/:id/planos', upload.array('planos'), async (req, res) => {
 app.get('/api/sitio/:id/planos', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ planos: sitio.planos || [] });
     } catch (err) {
@@ -687,7 +671,7 @@ app.post('/api/sitio/:id/material', upload.array('material'), async (req, res) =
         }
         // Guarda el material en el sitio
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $push: { material: { $each: material } } }
         );
         res.json({ mensaje: 'Material subido', material });
@@ -700,7 +684,7 @@ app.post('/api/sitio/:id/material', upload.array('material'), async (req, res) =
 app.get('/api/sitio/:id/material', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ material: sitio.material || [] });
     } catch (err) {
@@ -713,12 +697,12 @@ app.delete('/api/sitio/:id/material/:nombre', async (req, res) => {
     try {
         const id = req.params.id;
         const nombre = req.params.nombre;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         const material = Array.isArray(sitio.material) ? sitio.material : [];
         const nuevoMaterial = material.filter(m => m.nombre !== nombre);
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: { material: nuevoMaterial } }
         );
         res.json({ mensaje: 'Material eliminado' });
@@ -737,7 +721,7 @@ app.delete('/api/sitio/:id/eliminar-con-codigo', async (req, res) => {
         if (codigoMaestro !== CODIGO_MAESTRO) {
             return res.status(403).json({ error: 'Código maestro incorrecto' });
         }
-        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
+        const result = await sitiosCol.deleteOne({ _id: id });
         if (result.deletedCount === 1) {
             io.emit('sitioEliminado', { id });
             res.json({ mensaje: 'Sitio eliminado' });
@@ -754,7 +738,7 @@ app.post('/api/sitio/:id/marcar-trabajo', async (req, res) => {
     try {
         const id = req.params.id;
         const result = await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: { esSitioTrabajo: true } }
         );
         if (result.matchedCount === 1) {
@@ -768,7 +752,7 @@ app.post('/api/sitio/:id/marcar-trabajo', async (req, res) => {
 });
 
 // Subir evidencia de trabajo realizado en sitio de trabajo
-app.post('/api/sitio/:id/trabajo', require('multer')().any(), async (req, res) => {
+app.post('/api/sitio/:id/trabajo', upload.any(), async (req, res) => {
     try {
         const id = req.params.id;
         const { descripcion } = req.body;
@@ -792,7 +776,7 @@ app.post('/api/sitio/:id/trabajo', require('multer')().any(), async (req, res) =
             fecha: new Date()
         };
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $push: { evidenciasTrabajo: evidencia } }
         );
         res.json({ mensaje: 'Evidencia de trabajo guardada', evidencia });
@@ -805,7 +789,7 @@ app.post('/api/sitio/:id/trabajo', require('multer')().any(), async (req, res) =
 app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ evidenciasTrabajo: sitio.evidenciasTrabajo || [] });
     } catch (err) {
@@ -817,17 +801,33 @@ app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
 app.post('/api/sitio/:id/entregar', async (req, res) => {
     try {
         const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const sitio = await sitiosCol.findOne({ _id: id });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         if (sitio.entregado) {
             return res.status(400).json({ error: 'El sitio ya fue entregado' });
         }
         await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
+            { _id: id },
             { $set: { entregado: true, fechaEntrega: new Date() } }
         );
         res.json({ mensaje: 'Sitio entregado correctamente' });
     } catch (err) {
         res.status(500).json({ error: 'Error al entregar el sitio' });
+    }
+});
+
+// Verificar sesión de usuario
+app.post('/api/verificar-sesion', async (req, res) => {
+    const { usuario } = req.body;
+    if (!usuario) return res.status(400).json({ valida: false, error: 'Usuario requerido' });
+    try {
+        const user = await usuariosCol.findOne({ usuario });
+        if (user) {
+            res.json({ valida: true });
+        } else {
+            res.json({ valida: false });
+        }
+    } catch (err) {
+        res.status(500).json({ valida: false, error: 'Error al verificar sesión' });
     }
 });
