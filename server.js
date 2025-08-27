@@ -1,11 +1,11 @@
-
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const http = require('http');
 const { Server } = require('socket.io');
-const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
-const stream = require('stream');
+const { MongoClient, ObjectId } = require('mongodb');
+const path = require('path');
+const fs = require('fs');
 const axios = require('axios'); // Agrega axios para llamadas HTTP
 
 const app = express();
@@ -20,24 +20,39 @@ const io = new Server(server, {
 // NUEVA CADENA DE CONEXIÓN PARA AZURE COSMOS DB
 const MONGO_URL = 'mongodb://capacitacion:9xPmxNE3KXsvG5GtaWtemTrdzTNKFlFwb7POLtG1g0oCdz3J3Tn98xYg3M8K8yxGHGz5UH2jEVAoACDbPQD9tA==@capacitacion.mongo.cosmos.azure.com:10255/?ssl=true&retrywrites=false&maxIdleTimeMS=120000&appName=@capacitacion@';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs;
+let db, cursosCol, usuariosCol, sitiosCol;
+// Elimina gfs y GridFSBucket
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
         db = client.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
-        sitiosCol = db.collection('sitios'); // <-- nueva colección
-        gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
-        console.log('Conectado a MongoDB y GridFS');
+        sitiosCol = db.collection('sitios');
+        console.log('Conectado a Cosmos DB');
     })
     .catch(err => {
-        console.error('Error conectando a MongoDB', err);
+        console.error('Error conectando a Cosmos DB', err);
         process.exit(1);
     });
 
-const storage = multer.memoryStorage();
+// --- Cambia multer a guardar en disco ---
+const UPLOADS_DIR = path.join(__dirname, 'uploads');
+if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR);
+
+const storage = multer.diskStorage({
+    destination: function (req, file, cb) {
+        cb(null, UPLOADS_DIR);
+    },
+    filename: function (req, file, cb) {
+        // Usa nombre original, pero puedes agregar timestamp si quieres evitar duplicados
+        cb(null, Date.now() + '_' + file.originalname);
+    }
+});
 const upload = multer({ storage });
+
+// Sirve archivos estáticos desde /uploads
+app.use('/api/imagen', express.static(UPLOADS_DIR));
 
 const corsOptions = {
     origin: '*',
@@ -48,49 +63,28 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
+// Guardar curso y pasos en Cosmos DB y guardar imágenes/videos en disco
 app.post('/api/curso', upload.fields([
     { name: 'imagenes' },
     { name: 'portada', maxCount: 1 }
 ]), async (req, res) => {
     try {
-        const { titulo, descripcion, portadaNombre, categoria } = req.body; // <-- agrega categoria
+        const { titulo, descripcion, portadaNombre, categoria } = req.body;
         let pasos = [];
         let archivosMap = {};
         let portada = null;
 
-        // Guardar portada en GridFS si existe
+        // Guardar portada en disco si existe
         if (req.files && req.files['portada'] && req.files['portada'][0]) {
-            const portadaFile = req.files['portada'][0];
-            const bufferStream = new stream.PassThrough();
-            bufferStream.end(portadaFile.buffer);
-            await new Promise((resolve, reject) => {
-                const uploadStream = gfs.openUploadStream(portadaFile.originalname, {
-                    contentType: portadaFile.mimetype
-                });
-                bufferStream.pipe(uploadStream)
-                    .on('error', reject)
-                    .on('finish', resolve);
-            });
-            portada = portadaFile.originalname;
+            portada = req.files['portada'][0].filename;
         } else if (portadaNombre) {
             portada = portadaNombre;
         }
 
-        // Guardar imágenes/videos de pasos en GridFS
+        // Guardar imágenes/videos de pasos en disco
         if (req.files && req.files['imagenes']) {
             for (const file of req.files['imagenes']) {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(file.buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(file.originalname, {
-                        contentType: file.mimetype
-                    });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
-                archivosMap[file.originalname] = file.originalname;
+                archivosMap[file.originalname] = file.filename;
             }
         }
 
@@ -103,72 +97,15 @@ app.post('/api/curso', upload.fields([
                 }
                 return {
                     ...p,
-                    imagen: archivoNombre && archivosMap[archivoNombre] ? archivoNombre : null
+                    imagen: archivoNombre && archivosMap[archivoNombre] ? archivosMap[archivoNombre] : null
                 };
             });
         }
-        // --- Guarda la categoría en el documento ---
         await cursosCol.insertOne({ titulo, descripcion, portada, categoria, pasos });
         io.emit('nuevoCurso', { mensaje: 'Nuevo curso agregado' });
         res.json({ mensaje: 'Curso recibido' });
     } catch (err) {
         res.status(500).json({ error: 'Error al guardar el curso' });
-    }
-});
-
-// Endpoint para servir imágenes o videos desde GridFS (con soporte de Range para videos)
-app.options('/api/imagen/:nombre', (req, res) => {
-    res.set('Access-Control-Allow-Origin', '*');
-    res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
-    res.sendStatus(204);
-});
-
-app.get('/api/imagen/:nombre', async (req, res) => {
-    try {
-        const nombre = req.params.nombre;
-        const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
-        if (!files || files.length === 0) {
-            res.set('Access-Control-Allow-Origin', '*');
-            res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-            res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
-            return res.sendStatus(404);
-        }
-        const file = files[0];
-        res.set('Access-Control-Allow-Origin', '*');
-        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
-        res.set('Accept-Ranges', 'bytes');
-        res.set('Content-Type', file.contentType || 'application/octet-stream');
-
-        // Soporte para streaming de video (Range requests)
-        const range = req.headers.range;
-        if (range && /^bytes=/.test(range)) {
-            const parts = range.replace(/bytes=/, '').split('-');
-            const start = parseInt(parts[0], 10);
-            const end = parts[1] ? parseInt(parts[1], 10) : file.length - 1;
-            const chunkSize = (end - start) + 1;
-            res.status(206);
-            res.set('Content-Range', `bytes ${start}-${end}/${file.length}`);
-            res.set('Content-Length', chunkSize);
-            const downloadStream = gfs.openDownloadStreamByName(nombre, { start, end: end + 1 });
-            downloadStream.on('error', () => {
-                res.sendStatus(404);
-            });
-            downloadStream.pipe(res);
-        } else {
-            res.set('Content-Length', file.length);
-            const downloadStream = gfs.openDownloadStreamByName(nombre);
-            downloadStream.on('error', () => {
-                res.sendStatus(404);
-            });
-            downloadStream.pipe(res);
-        }
-    } catch (err) {
-        res.set('Access-Control-Allow-Origin', '*');
-        res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
-        res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
-        res.sendStatus(500);
     }
 });
 
@@ -271,36 +208,15 @@ app.put('/api/curso/:id', upload.fields([
         let archivosMap = {};
         let portada = portadaNombre || null;
 
-        // Guardar portada en GridFS si existe
+        // Guardar portada en disco si existe
         if (req.files && req.files['portada'] && req.files['portada'][0]) {
-            const portadaFile = req.files['portada'][0];
-            const bufferStream = new stream.PassThrough();
-            bufferStream.end(portadaFile.buffer);
-            await new Promise((resolve, reject) => {
-                const uploadStream = gfs.openUploadStream(portadaFile.originalname, {
-                    contentType: portadaFile.mimetype
-                });
-                bufferStream.pipe(uploadStream)
-                    .on('error', reject)
-                    .on('finish', resolve);
-            });
-            portada = portadaFile.originalname;
+            portada = req.files['portada'][0].filename;
         }
 
-        // Guardar imágenes/videos de pasos en GridFS
+        // Guardar imágenes/videos de pasos en disco
         if (req.files && req.files['imagenes']) {
             for (const file of req.files['imagenes']) {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(file.buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(file.originalname, {
-                        contentType: file.mimetype
-                    });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
-                archivosMap[file.originalname] = file.originalname;
+                archivosMap[file.originalname] = file.filename;
             }
         }
 
@@ -499,26 +415,16 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
         let evidenciasNoTerminado = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(file.buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(file.originalname, {
-                        contentType: file.mimetype
-                    });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
                 // Clasifica por campo
                 if (file.fieldname === 'fotosNoTerminado') {
                     evidenciasNoTerminado.push({
                         nombre: file.originalname,
-                        url: `/api/imagen/${file.originalname}`
+                        url: `/api/imagen/${file.filename}`
                     });
                 } else {
                     evidencias.push({
                         nombre: file.originalname,
-                        url: `/api/imagen/${file.originalname}`
+                        url: `/api/imagen/${file.filename}`
                     });
                 }
             }
@@ -686,19 +592,9 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
         let evidencias = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(file.buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(file.originalname, {
-                        contentType: file.mimetype
-                    });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
                 evidencias.push({
                     nombre: file.originalname,
-                    url: `/api/imagen/${file.originalname}`
+                    url: `/api/imagen/${file.filename}`
                 });
             }
         }
@@ -747,19 +643,9 @@ app.post('/api/sitio/:id/planos', upload.array('planos'), async (req, res) => {
         }
         let planos = [];
         for (const file of req.files) {
-            const bufferStream = new stream.PassThrough();
-            bufferStream.end(file.buffer);
-            await new Promise((resolve, reject) => {
-                const uploadStream = gfs.openUploadStream(file.originalname, {
-                    contentType: file.mimetype
-                });
-                bufferStream.pipe(uploadStream)
-                    .on('error', reject)
-                    .on('finish', resolve);
-            });
             planos.push({
                 nombre: file.originalname,
-                url: `/api/imagen/${file.originalname}`
+                url: `/api/imagen/${file.filename}`
             });
         }
         // Guarda los planos en el sitio
@@ -794,19 +680,9 @@ app.post('/api/sitio/:id/material', upload.array('material'), async (req, res) =
         }
         let material = [];
         for (const file of req.files) {
-            const bufferStream = new stream.PassThrough();
-            bufferStream.end(file.buffer);
-            await new Promise((resolve, reject) => {
-                const uploadStream = gfs.openUploadStream(file.originalname, {
-                    contentType: file.mimetype
-                });
-                bufferStream.pipe(uploadStream)
-                    .on('error', reject)
-                    .on('finish', resolve);
-            });
             material.push({
                 nombre: file.originalname,
-                url: `/api/imagen/${file.originalname}`
+                url: `/api/imagen/${file.filename}`
             });
         }
         // Guarda el material en el sitio
@@ -902,19 +778,9 @@ app.post('/api/sitio/:id/trabajo', require('multer')().any(), async (req, res) =
         let fotos = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(file.buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(file.originalname, {
-                        contentType: file.mimetype
-                    });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
                 fotos.push({
                     nombre: file.originalname,
-                    url: `/api/imagen/${file.originalname}`
+                    url: `/api/imagen/${file.filename}`
                 });
             }
         }
