@@ -951,9 +951,10 @@ app.post('/api/sitio/:id/entregar', async (req, res) => {
         const id = req.params.id;
         const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
-        if (sitio.entregado) {
-            return res.status(400).json({ error: 'El sitio ya fue entregado' });
-        }
+        // Elimina la verificación para permitir entregar varias veces
+        // if (sitio.entregado) {
+        //     return res.status(400).json({ error: 'El sitio ya fue entregado' });
+        // }
         await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
             { $set: { entregado: true, fechaEntrega: new Date() } }
