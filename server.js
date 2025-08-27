@@ -1,3 +1,4 @@
+
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
@@ -16,7 +17,8 @@ const io = new Server(server, {
 });
 
 // --- MongoDB config ---
-const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
+// NUEVA CADENA DE CONEXIÓN PARA AZURE COSMOS DB
+const MONGO_URL = 'mongodb://capacitacion:9xPmxNE3KXsvG5GtaWtemTrdzTNKFlFwb7POLtG1g0oCdz3J3Tn98xYg3M8K8yxGHGz5UH2jEVAoACDbPQD9tA==@capacitacion.mongo.cosmos.azure.com:10255/?ssl=true&retrywrites=false&maxIdleTimeMS=120000&appName=@capacitacion@';
 const DB_NAME = 'capacitacion';
 let db, cursosCol, usuariosCol, sitiosCol, gfs;
 
