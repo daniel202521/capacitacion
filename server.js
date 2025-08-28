@@ -362,7 +362,7 @@ app.post('/api/chat', async (req, res) => {
 // Socket.IO conexión
 
 // --- Chat de soporte en tiempo real (solo memoria, sin base de datos) ---
-const asesores = { 'daniel@naisata.com': null };
+const asesores = {}; // Cambia a objeto general
 const usuariosPorSocket = {};
 
 io.on('connection', (socket) => {
@@ -370,21 +370,28 @@ io.on('connection', (socket) => {
 
     // El asesor se identifica
     socket.on('chat:soyAsesor', data => {
-        if (data && data.usuario === 'daniel@naisata.com') {
-            asesores['daniel@naisata.com'] = socket.id;
+        if (data && data.usuario) {
+            asesores[data.usuario] = socket.id;
             socket.emit('chat:asesorConectado');
+            // Notifica a todos los usuarios esperando que el asesor está disponible
+            Object.keys(usuariosPorSocket).forEach(userSocketId => {
+                io.to(userSocketId).emit('chat:asesorConectado');
+            });
             console.log('Asesor conectado:', data.usuario);
         }
     });
 
     // Usuario solicita hablar con asesor
     socket.on('chat:solicitarAsesor', data => {
-        usuariosPorSocket[socket.id] = { asesor: 'daniel@naisata.com' };
+        // Permite que el usuario indique el asesor, o usa el primero disponible
+        let asesorUsuario = data && data.usuario ? data.usuario : Object.keys(asesores)[0];
+        usuariosPorSocket[socket.id] = { asesor: asesorUsuario };
         // Notifica al asesor si está conectado, incluyendo el socketId del usuario
-        const asesorSocketId = asesores['daniel@naisata.com'];
+        const asesorSocketId = asesores[asesorUsuario];
         if (asesorSocketId) {
             io.to(asesorSocketId).emit('chat:usuarioSolicitaAsesor', { socketId: socket.id });
-            io.to(asesorSocketId).emit('chat:asesorConectado');
+            // Notifica SOLO a este usuario que el asesor está disponible
+            io.to(socket.id).emit('chat:asesorConectado');
         }
     });
 
@@ -406,8 +413,19 @@ io.on('connection', (socket) => {
 
     // Limpieza al desconectar
     socket.on('disconnect', () => {
-        if (asesores['daniel@naisata.com'] === socket.id) {
-            asesores['daniel@naisata.com'] = null;
+        // Elimina al asesor si se desconecta
+        for (const usuario in asesores) {
+            if (asesores[usuario] === socket.id) {
+                asesores[usuario] = null;
+            }
+        }
+        // Notifica al asesor que el usuario se desconectó
+        if (usuariosPorSocket[socket.id]) {
+            const asesorUsuario = usuariosPorSocket[socket.id].asesor;
+            const asesorSocketId = asesores[asesorUsuario];
+            if (asesorSocketId) {
+                io.to(asesorSocketId).emit('chat:usuarioDesconectado', { socketId: socket.id });
+            }
         }
         delete usuariosPorSocket[socket.id];
     });
