@@ -1006,3 +1006,8 @@ app.post('/api/sitio/:id/entregar', async (req, res) => {
         res.status(500).json({ error: 'Error al entregar el sitio' });
     }
 });
+
+// Endpoint de salud para Render
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
