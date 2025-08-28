@@ -368,7 +368,6 @@ const usuariosPorSocket = {};
 io.on('connection', (socket) => {
     console.log('Cliente conectado vía Socket.IO');
 
-    // El asesor se identifica (puedes hacer esto desde un panel especial para daniel@naisata.com)
     // El asesor se identifica
     socket.on('chat:soyAsesor', data => {
         if (data && data.usuario === 'daniel@naisata.com') {
@@ -411,34 +410,7 @@ io.on('connection', (socket) => {
         }
         delete usuariosPorSocket[socket.id];
     });
-        if (asesorSocketId) {
-            io.to(asesorSocketId).emit('chat:asesorConectado');
-        }
-    });
-
-    // Usuario envía mensaje para asesor
-    socket.on('chat:mensajeUsuario', data => {
-        const asesor = (data && data.para) || (usuariosPorSocket[socket.id] && usuariosPorSocket[socket.id].asesor);
-        const asesorSocketId = asesores[asesor];
-        if (asesorSocketId) {
-            io.to(asesorSocketId).emit('chat:mensajeUsuario', { texto: data.texto, socketId: socket.id });
-        }
-    });
-
-    // Asesor responde al usuario
-    socket.on('chat:mensajeAsesor', data => {
-        if (data && data.socketId && data.texto) {
-            io.to(data.socketId).emit('chat:mensajeAsesor', { texto: data.texto });
-        }
-    });
-
-    // Limpieza al desconectar
-    socket.on('disconnect', () => {
-        if (asesores['daniel@naisata.com'] === socket.id) {
-            asesores['daniel@naisata.com'] = null;
-        }
-        delete usuariosPorSocket[socket.id];
-    });
+});
 
 
 const PORT = process.env.PORT || 3001;
