@@ -360,15 +360,56 @@ app.post('/api/chat', async (req, res) => {
 });
 
 // Socket.IO conexión
+
+// --- Chat de soporte en tiempo real (solo memoria, sin base de datos) ---
+const asesores = { 'daniel@naisata.com': null };
+const usuariosPorSocket = {};
+
 io.on('connection', (socket) => {
     console.log('Cliente conectado vía Socket.IO');
-    // Opcional: puedes escuchar eventos del frontend aquí si quieres
-    // socket.on('crearCurso', async (data) => { ... });
-    // socket.on('eliminarCurso', async (data) => { ... });
-    // socket.on('editarCurso', async (data) => { ... });
-    // socket.on('crearSitio', async (data) => { ... });
-    // socket.on('editarSitio', async (data) => { ... });
-    // socket.on('eliminarSitio', async (data) => { ... });
+
+    // El asesor se identifica (puedes hacer esto desde un panel especial para daniel@naisata.com)
+    socket.on('chat:soyAsesor', data => {
+        if (data && data.usuario === 'daniel@naisata.com') {
+            asesores['daniel@naisata.com'] = socket.id;
+            socket.emit('chat:asesorConectado');
+            console.log('Asesor conectado:', data.usuario);
+        }
+    });
+
+    // Usuario solicita hablar con asesor
+    socket.on('chat:solicitarAsesor', data => {
+        usuariosPorSocket[socket.id] = { asesor: 'daniel@naisata.com' };
+        // Notifica al asesor si está conectado
+        const asesorSocketId = asesores['daniel@naisata.com'];
+        if (asesorSocketId) {
+            io.to(asesorSocketId).emit('chat:asesorConectado');
+        }
+    });
+
+    // Usuario envía mensaje para asesor
+    socket.on('chat:mensajeUsuario', data => {
+        const asesor = (data && data.para) || (usuariosPorSocket[socket.id] && usuariosPorSocket[socket.id].asesor);
+        const asesorSocketId = asesores[asesor];
+        if (asesorSocketId) {
+            io.to(asesorSocketId).emit('chat:mensajeUsuario', { texto: data.texto, socketId: socket.id });
+        }
+    });
+
+    // Asesor responde al usuario
+    socket.on('chat:mensajeAsesor', data => {
+        if (data && data.socketId && data.texto) {
+            io.to(data.socketId).emit('chat:mensajeAsesor', { texto: data.texto });
+        }
+    });
+
+    // Limpieza al desconectar
+    socket.on('disconnect', () => {
+        if (asesores['daniel@naisata.com'] === socket.id) {
+            asesores['daniel@naisata.com'] = null;
+        }
+        delete usuariosPorSocket[socket.id];
+    });
 });
 
 const PORT = process.env.PORT || 3001;
@@ -951,9 +992,10 @@ app.post('/api/sitio/:id/entregar', async (req, res) => {
         const id = req.params.id;
         const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
-        if (sitio.entregado) {
-            return res.status(400).json({ error: 'El sitio ya fue entregado' });
-        }
+        // Elimina la verificación para permitir entregar varias veces
+        // if (sitio.entregado) {
+        //     return res.status(400).json({ error: 'El sitio ya fue entregado' });
+        // }
         await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
             { $set: { entregado: true, fechaEntrega: new Date() } }
