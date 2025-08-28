@@ -380,9 +380,10 @@ io.on('connection', (socket) => {
     // Usuario solicita hablar con asesor
     socket.on('chat:solicitarAsesor', data => {
         usuariosPorSocket[socket.id] = { asesor: 'daniel@naisata.com' };
-        // Notifica al asesor si está conectado
+        // Notifica al asesor si está conectado, incluyendo el socketId del usuario
         const asesorSocketId = asesores['daniel@naisata.com'];
         if (asesorSocketId) {
+            io.to(asesorSocketId).emit('chat:usuarioSolicitaAsesor', { socketId: socket.id });
             io.to(asesorSocketId).emit('chat:asesorConectado');
         }
     });
