@@ -550,7 +550,8 @@ app.get('/api/sitio/:id/equipos', async (req, res) => {
 app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
     try {
         const id = req.params.id;
-        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma } = req.body;
+        // Agrega los campos del instalador
+        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma, nombreInstalador, firmaInstalador } = req.body;
         if (!tipo || !descripcion || !estado) return res.status(400).json({ error: 'Faltan datos' });
 
         // Procesar archivos
@@ -592,7 +593,10 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             evidencias,
             fecha: new Date(),
             nombreRecibe: nombreRecibe || '',
-            firma: firma || ''
+            firma: firma || '',
+            // NUEVO: instalador
+            nombreInstalador: nombreInstalador || '',
+            firmaInstalador: firmaInstalador || ''
         };
 
         // Si está en curso, agrega motivo y evidencias de no terminado
