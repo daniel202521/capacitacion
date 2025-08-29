@@ -522,7 +522,7 @@ app.post('/api/sitio/:id/equipos', async (req, res) => {
         }
         const result = await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
-            { $set: { equipos } }
+            { $push: { equipos: { $each: equipos } } }
         );
         if (result.matchedCount === 1) {
             res.json({ mensaje: 'Equipos guardados' });
