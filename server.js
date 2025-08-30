@@ -461,30 +461,41 @@ app.post('/api/curso/:id/equipos', async (req, res) => {
         if (!Array.isArray(equipos) || equipos.length === 0) {
             return res.status(400).json({ error: 'Equipos requeridos' });
         }
-        const result = await cursosCol.updateOne(
+        // Agrega los equipos a la lista existente (no reemplaza)
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { equipos: { $each: equipos } } }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Equipos agregados' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al agregar equipos' });
+    }
+});
+
+// Editar equipos para un sitio (EDITAR: SET)
+app.put('/api/sitio/:id/equipos', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { equipos } = req.body;
+        if (!Array.isArray(equipos)) {
+            return res.status(400).json({ error: 'Equipos requeridos' });
+        }
+        // Reemplaza la lista de equipos por la nueva (edición)
+        const result = await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
             { $set: { equipos } }
         );
         if (result.matchedCount === 1) {
-            io.emit('equiposActualizados', { sitioId: id });
-            res.json({ mensaje: 'Equipos guardados' });
+            res.json({ mensaje: 'Equipos actualizados' });
         } else {
-            res.status(404).json({ error: 'Curso no encontrado' });
+            res.status(404).json({ error: 'Sitio no encontrado' });
         }
     } catch (err) {
-        res.status(500).json({ error: 'Error al guardar equipos' });
-    }
-});
-
-// Obtener equipos de un curso (opcional)
-app.get('/api/curso/:id/equipos', async (req, res) => {
-    try {
-        const id = req.params.id;
-        const curso = await cursosCol.findOne({ _id: new ObjectId(id) });
-        if (!curso) return res.status(404).json({ error: 'Curso no encontrado' });
-        res.json({ equipos: curso.equipos || [] });
-    } catch (err) {
-        res.status(500).json({ error: 'Error al obtener equipos' });
+        res.status(500).json({ error: 'Error al editar equipos' });
     }
 });
 
@@ -520,17 +531,18 @@ app.post('/api/sitio/:id/equipos', async (req, res) => {
         if (!Array.isArray(equipos) || equipos.length === 0) {
             return res.status(400).json({ error: 'Equipos requeridos' });
         }
+        // Agrega los equipos a la lista existente (no reemplaza)
         const result = await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
             { $push: { equipos: { $each: equipos } } }
         );
         if (result.matchedCount === 1) {
-            res.json({ mensaje: 'Equipos guardados' });
+            res.json({ mensaje: 'Equipos agregados' });
         } else {
             res.status(404).json({ error: 'Sitio no encontrado' });
         }
     } catch (err) {
-        res.status(500).json({ error: 'Error al guardar equipos' });
+        res.status(500).json({ error: 'Error al agregar equipos' });
     }
 });
 
