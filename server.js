@@ -1048,3 +1048,33 @@ app.post('/api/sitio/:id/entregar', async (req, res) => {
 app.get('/health', (req, res) => {
     res.status(200).send('OK');
 });
+
+// Editar un solo equipo de un sitio por índice
+app.put('/api/sitio/:id/equipo/:idx', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const idx = parseInt(req.params.idx, 10);
+        const { nombre, modelo, serie, ip, usuario, password } = req.body;
+        if (isNaN(idx)) return res.status(400).json({ error: 'Índice inválido' });
+        // Construye el objeto de actualización solo con los campos enviados
+        const updateFields = {};
+        if (nombre !== undefined) updateFields[`equipos.${idx}.nombre`] = nombre;
+        if (modelo !== undefined) updateFields[`equipos.${idx}.modelo`] = modelo;
+        if (serie !== undefined) updateFields[`equipos.${idx}.serie`] = serie;
+        if (ip !== undefined) updateFields[`equipos.${idx}.ip`] = ip;
+        if (usuario !== undefined) updateFields[`equipos.${idx}.usuario`] = usuario;
+        if (password !== undefined) updateFields[`equipos.${idx}.password`] = password;
+
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Equipo actualizado' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al editar el equipo' });
+    }
+});
