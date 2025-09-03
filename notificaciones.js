@@ -69,10 +69,15 @@ async function programarRecordatoriosPersonalizados(db) {
         // Hora en formato HH:MM
         const [hh, mm] = rec.hora.split(':');
         const cronExp = `${parseInt(mm, 10)} ${parseInt(hh, 10)} * * *`;
+        console.log(`[CRON] Programando llamada para ${rec.numero} a las ${rec.hora} (${cronExp})`);
         cron.schedule(cronExp, async () => {
-            // Solo llamada, no WhatsApp
-            await realizarLlamada(rec.numero);
-            console.log(`Recordatorio personalizado (llamada) enviado a ${rec.numero} (${rec.hora})`);
+            console.log(`[CRON] Ejecutando llamada programada para ${rec.numero} a las ${rec.hora} (${cronExp})`);
+            try {
+                await realizarLlamada(rec.numero);
+                console.log(`[CRON] Llamada realizada a ${rec.numero} (${rec.hora})`);
+            } catch (err) {
+                console.error(`[CRON] Error al realizar llamada a ${rec.numero}:`, err);
+            }
         });
     });
 }
