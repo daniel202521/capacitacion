@@ -6,7 +6,8 @@ const { Server } = require('socket.io');
 const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
 const stream = require('stream');
 const axios = require('axios'); // Agrega axios para llamadas HTTP
-const notificaciones = require('./notificaciones.js');
+const path = require('path');
+const notificaciones = require(path.join(__dirname, 'notificaciones.js'));
 
 const app = express();
 const server = http.createServer(app);
