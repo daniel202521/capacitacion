@@ -6,8 +6,6 @@ const { Server } = require('socket.io');
 const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
 const stream = require('stream');
 const axios = require('axios'); // Agrega axios para llamadas HTTP
-const path = require('path');
-const notificaciones = require(path.join(__dirname, 'notificaciones.js'));
 
 const app = express();
 const server = http.createServer(app);
@@ -20,21 +18,16 @@ const io = new Server(server, {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs, numerosCol, recordatoriosCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs;
 
 MongoClient.connect(MONGO_URL)
-    .then(async client => {
+    .then(client => {
         db = client.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
         sitiosCol = db.collection('sitios'); // <-- nueva colección
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
-        numerosCol = db.collection('numeros_notificacion'); // NUEVO
-        recordatoriosCol = db.collection('recordatorios'); // NUEVO
         console.log('Conectado a MongoDB y GridFS');
-
-        // Programar recordatorios personalizados
-        await notificaciones.programarRecordatoriosPersonalizados(db);
     })
     .catch(err => {
         console.error('Error conectando a MongoDB', err);
@@ -439,7 +432,7 @@ io.on('connection', (socket) => {
 });
 
 
-const PORT = process.env.PORT; // Render asigna el puerto
+const PORT = process.env.PORT || 3001;
 const HOST = '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
@@ -1083,45 +1076,5 @@ app.put('/api/sitio/:id/equipo/:idx', async (req, res) => {
         }
     } catch (err) {
         res.status(500).json({ error: 'Error al editar el equipo' });
-    }
-});
-
-// --- INTEGRACIÓN DE NOTIFICACIONES AUTOMÁTICAS ---
-
-// --- ENDPOINT PARA GUARDAR NÚMERO DE TELÉFONO PARA NOTIFICACIONES ---
-app.post('/api/numero-notificacion', async (req, res) => {
-    const { numero } = req.body;
-    if (!numero || !numero.match(/^[0-9]{10,15}$/)) {
-        return res.status(400).json({ ok: false, error: 'Número inválido' });
-    }
-    try {
-        // Evita duplicados
-        const existe = await numerosCol.findOne({ numero });
-        if (existe) return res.json({ ok: true, mensaje: 'Ya existe' });
-        await numerosCol.insertOne({ numero });
-        res.json({ ok: true });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: 'Error al guardar número' });
-    }
-});
-
-// --- MODIFICA LA FUNCIÓN DE OBTENER NÚMEROS EN NOTIFICACIONES ---
-notificaciones.obtenerNumerosUsuarios = async function() {
-    if (!numerosCol) return [];
-    const docs = await numerosCol.find({}).toArray();
-    return docs.map(d => d.numero);
-};
-
-// --- ENDPOINT PARA PROGRAMAR RECORDATORIO PERSONALIZADO ---
-app.post('/api/programar-recordatorio', async (req, res) => {
-    const { numero, hora, mensaje } = req.body;
-    if (!numero || !hora || !mensaje) return res.status(400).json({ ok: false, error: 'Faltan datos' });
-    if (!numero.match(/^[0-9]{10,15}$/)) return res.status(400).json({ ok: false, error: 'Número inválido' });
-    if (!hora.match(/^\d{2}:\d{2}$/)) return res.status(400).json({ ok: false, error: 'Hora inválida' });
-    try {
-        await recordatoriosCol.insertOne({ numero, hora, mensaje });
-        res.json({ ok: true });
-    } catch (err) {
-        res.status(500).json({ ok: false, error: 'Error al guardar recordatorio' });
     }
 });
