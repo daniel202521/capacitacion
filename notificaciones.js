@@ -69,9 +69,9 @@ async function programarRecordatoriosPersonalizados(db) {
         const [hh, mm] = rec.hora.split(':');
         const cronExp = `${parseInt(mm, 10)} ${parseInt(hh, 10)} * * *`;
         cron.schedule(cronExp, async () => {
-            await enviarWhatsapp(rec.numero, rec.mensaje);
+            // Solo llamada, no WhatsApp
             await realizarLlamada(rec.numero);
-            console.log(`Recordatorio personalizado enviado a ${rec.numero} (${rec.hora})`);
+            console.log(`Recordatorio personalizado (llamada) enviado a ${rec.numero} (${rec.hora})`);
         });
     });
 }
