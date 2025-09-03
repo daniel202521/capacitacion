@@ -46,6 +46,20 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Importar scanNetworkIPs de sdp.js
+const { scanNetworkIPs } = require('./sdp');
+
+// Endpoint para escanear IPs activas en la red local
+app.get('/api/scan-ips', async (req, res) => {
+    // baseIP puede venir por query, ejemplo: ?baseIP=192.168.1.
+    const baseIP = req.query.baseIP || '192.168.1.';
+    const start = parseInt(req.query.start) || 1;
+    const end = parseInt(req.query.end) || 254;
+    scanNetworkIPs(baseIP, start, end, (ips) => {
+        res.json({ ips });
+    });
+});
+
 // Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
 app.post('/api/curso', upload.fields([
     { name: 'imagenes' },
