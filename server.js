@@ -438,7 +438,7 @@ io.on('connection', (socket) => {
 });
 
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT; // Render asigna el puerto
 const HOST = '0.0.0.0';
 
 server.listen(PORT, HOST, () => {
