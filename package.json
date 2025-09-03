@@ -17,7 +17,9 @@
     "mongodb": "^6.18.0",
     "mongoose": "^8.18.0",
     "multer": "^2.0.2",
-    "socket.io": "^4.8.1"
+    "node-cron": "^4.2.1",
+    "socket.io": "^4.8.1",
+    "twilio": "^5.8.2"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
