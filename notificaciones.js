@@ -39,14 +39,15 @@ async function enviarWhatsapp(numero, texto) {
 // Función para realizar llamada automática
 async function realizarLlamada(numero) {
     try {
-        await twilioClient.calls.create({
+        console.log(`[Twilio] Intentando llamada a ${numero}...`);
+        const call = await twilioClient.calls.create({
             from: twilioCallNumber,
             to: `+${numero}`,
             twiml: `<Response><Say>Recuerda subir tu evidencia y crear tu ticket hoy. No lo olvides.</Say></Response>`
         });
-        console.log(`Llamada realizada a ${numero}`);
+        console.log(`[Twilio] Llamada realizada a ${numero}. SID: ${call.sid}`);
     } catch (err) {
-        console.error(`Error realizando llamada a ${numero}:`, err.message);
+        console.error(`[Twilio] Error realizando llamada a ${numero}:`, err.message, err);
     }
 }
 
