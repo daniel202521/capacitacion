@@ -1,53 +1,42 @@
 const cron = require('node-cron');
-const twilio = require('twilio');
+const fetch = require('node-fetch'); // Asegúrate de tener node-fetch instalado
 
-// Configura tus credenciales de Twilio
-const accountSid = 'AC356512c99313e2f80c819947456a263b';
-const authToken = 'bd3e79de7668a335ed21c7f4713315cf';
-const twilioClient = twilio(accountSid, authToken);
+// SINCH credentials
+const SINCH_APP_KEY = 'fb9aef67-d609-44bc-bf0f-0bcf505808b9';
+const SINCH_APP_SECRET = 'rNp/eGx0iE2kyZYDUA/GyQ==';
+const SINCH_CLI = '+447418629761'; // El número mostrado como caller
 
-// Número de WhatsApp de Twilio (debes tenerlo verificado)
-const twilioWhatsappNumber = 'whatsapp:+15418718662'; // Tu número de Twilio para WhatsApp
-const twilioCallNumber = '+15418718662'; // Tu número de Twilio para llamadas
-
-// Función para obtener los números de la base de datos
-async function obtenerNumerosUsuarios() {
-    // Esta función será sobrescrita por el backend principal
-    return [
-        '521234567890', // Ejemplo de número internacional
-        // ...más números
-    ];
+function base64Encode(str) {
+    return Buffer.from(str).toString('base64');
 }
 
-// Mensaje de recordatorio
-const mensaje = 'Recuerda subir tu evidencia y crear tu ticket hoy. ¡No lo olvides!';
-
-// Función para enviar WhatsApp
-async function enviarWhatsapp(numero, texto) {
+// Función para realizar llamada TTS con Sinch
+async function realizarLlamada(numero, mensaje = 'Recuerda subir tu evidencia y crear tu ticket hoy. No lo olvides.') {
     try {
-        await twilioClient.messages.create({
-            from: twilioWhatsappNumber,
-            to: `whatsapp:+${numero}`,
-            body: texto
-        });
-        console.log(`WhatsApp enviado a ${numero}`);
+        const auth = base64Encode(`${SINCH_APP_KEY}:${SINCH_APP_SECRET}`);
+        const body = {
+            method: "ttsCallout",
+            ttsCallout: {
+                cli: SINCH_CLI,
+                domain: "pstn",
+                destination: { type: "number", endpoint: `+${numero}` },
+                locale: "es-ES",
+                prompts: `#tts[${mensaje}]`
+            }
+        };
+        const requestOptions = {
+            method: 'POST',
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Basic ${auth}`
+            },
+            body: JSON.stringify(body)
+        };
+        const response = await fetch("https://calling.api.sinch.com/calling/v1/callouts", requestOptions);
+        const result = await response.json();
+        console.log(`[Sinch] Llamada realizada a ${numero}:`, result);
     } catch (err) {
-        console.error(`Error enviando WhatsApp a ${numero}:`, err.message);
-    }
-}
-
-// Función para realizar llamada automática
-async function realizarLlamada(numero) {
-    try {
-        console.log(`[Twilio] Intentando llamada a ${numero}...`);
-        const call = await twilioClient.calls.create({
-            from: twilioCallNumber,
-            to: `+${numero}`,
-            twiml: `<Response><Say>Recuerda subir tu evidencia y crear tu ticket hoy. No lo olvides.</Say></Response>`
-        });
-        console.log(`[Twilio] Llamada realizada a ${numero}. SID: ${call.sid}`);
-    } catch (err) {
-        console.error(`[Twilio] Error realizando llamada a ${numero}:`, err.message, err);
+        console.error(`[Sinch] Error realizando llamada a ${numero}:`, err);
     }
 }
 
@@ -73,7 +62,7 @@ async function programarRecordatoriosPersonalizados(db) {
         cron.schedule(cronExp, async () => {
             console.log(`[CRON] Ejecutando llamada programada para ${rec.numero} a las ${rec.hora} (${cronExp})`);
             try {
-                await realizarLlamada(rec.numero);
+                await realizarLlamada(rec.numero, rec.mensaje);
                 console.log(`[CRON] Llamada realizada a ${rec.numero} (${rec.hora})`);
             } catch (err) {
                 console.error(`[CRON] Error al realizar llamada a ${rec.numero}:`, err);
@@ -84,8 +73,8 @@ async function programarRecordatoriosPersonalizados(db) {
 
 // Exporta la función para que el backend la llame después de conectar a MongoDB
 module.exports = {
-    enviarWhatsapp,
     realizarLlamada,
-    obtenerNumerosUsuarios,
-    programarRecordatoriosPersonalizados // <-- exporta la función
+    programarRecordatoriosPersonalizados
 };
+                console.error(`[CRON] Error al realizar llamada a ${rec.numero}:`, err);
+ 
