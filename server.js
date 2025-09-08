@@ -18,7 +18,7 @@ const io = new Server(server, {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
@@ -26,6 +26,7 @@ MongoClient.connect(MONGO_URL)
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
         sitiosCol = db.collection('sitios'); // <-- nueva colección
+        adminTicketsCol = db.collection('adminTickets'); // <-- colección para tickets administrativos
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('Conectado a MongoDB y GridFS');
     })
@@ -1076,5 +1077,49 @@ app.put('/api/sitio/:id/equipo/:idx', async (req, res) => {
         }
     } catch (err) {
         res.status(500).json({ error: 'Error al editar el equipo' });
+    }
+});
+
+// ENDPOINTS PARA TICKETS ADMINISTRATIVOS (guardar en BD y notificar por Socket.IO)
+
+// Obtener todos los tickets administrativos
+app.get('/api/admin/tickets', async (req, res) => {
+    try {
+        const tickets = await adminTicketsCol.find({}).sort({ fecha: -1 }).toArray();
+        tickets.forEach(t => t.id = t._id.toString());
+        res.json(tickets);
+    } catch (err) {
+        res.status(500).json({ error: 'Error al leer tickets administrativos' });
+    }
+});
+
+// Crear ticket administrativo
+app.post('/api/admin/ticket', async (req, res) => {
+    try {
+        const { folio, actividad, responsable } = req.body;
+        if (!folio || !actividad || !responsable) return res.status(400).json({ error: 'Faltan datos' });
+        const ticket = { folio, actividad, responsable, fecha: new Date() };
+        const result = await adminTicketsCol.insertOne(ticket);
+        ticket.id = result.insertedId.toString();
+        io.emit('adminTicketAgregado', ticket);
+        res.json({ mensaje: 'Ticket creado', ticket });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al crear ticket administrativo' });
+    }
+});
+
+// Eliminar ticket administrativo por id
+app.delete('/api/admin/ticket/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const result = await adminTicketsCol.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 1) {
+            io.emit('adminTicketEliminado', { id });
+            res.json({ mensaje: 'Ticket eliminado', id });
+        } else {
+            res.status(404).json({ error: 'Ticket no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar ticket' });
     }
 });
