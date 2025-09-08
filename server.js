@@ -29,6 +29,13 @@ MongoClient.connect(MONGO_URL)
         adminTicketsCol = db.collection('adminTickets'); // <-- colección para tickets administrativos
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('Conectado a MongoDB y GridFS');
+
+        // Iniciar servidor después de que la conexión a MongoDB esté lista
+        const PORT = process.env.PORT || 3001;
+        const HOST = '0.0.0.0';
+        server.listen(PORT, HOST, () => {
+            console.log(`Servidor backend GridFS iniciado en puerto ${PORT}`);
+        });
     })
     .catch(err => {
         console.error('Error conectando a MongoDB', err);
@@ -433,13 +440,6 @@ io.on('connection', (socket) => {
 });
 
 
-const PORT = process.env.PORT || 3001;
-const HOST = '0.0.0.0';
-
-server.listen(PORT, HOST, () => {
-    console.log(`Servidor backend GridFS iniciado en puerto ${PORT}`);
-});
-
 // Recuperar contraseña (ahora actualiza la contraseña directamente)
 app.post('/api/recuperar-password', async (req, res) => {
     const { usuario, nuevaPassword } = req.body;
@@ -564,7 +564,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
     try {
         const id = req.params.id;
         // Agrega los campos del instalador
-        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma, nombreInstalador, firmaInstalador } = req.body;
+        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma, nombreInstalador, firmaInstalador, responsable } = req.body;
         if (!tipo || !descripcion || !estado) return res.status(400).json({ error: 'Faltan datos' });
 
         // Procesar archivos
@@ -583,7 +583,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
                         .on('finish', resolve);
                 });
                 // Clasifica por campo
-                if (file.fieldname === 'fotosNoTerminado') {
+                if (file.fieldname === 'fotosNoTerminado' || file.fieldname === 'fotosNoTerminado[]') {
                     evidenciasNoTerminado.push({
                         nombre: file.originalname,
                         url: `/api/imagen/${file.originalname}`
@@ -609,7 +609,9 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             firma: firma || '',
             // NUEVO: instalador
             nombreInstalador: nombreInstalador || '',
-            firmaInstalador: firmaInstalador || ''
+            firmaInstalador: firmaInstalador || '',
+            // NUEVO: responsable (puede venir desde admin)
+            responsable: responsable || ''
         };
 
         // Si está en curso, agrega motivo y evidencias de no terminado
