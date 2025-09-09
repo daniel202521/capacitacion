@@ -405,7 +405,21 @@ MongoClient.connect(MONGO_URL)
 
                     // Tabla de movimientos
                     const tableTop = pdfDoc.y;
-                    const colWidths = [70, 150, 60, 110, 110, 110];
+                    // Calcula anchos dinámicos según el ancho disponible (márgenes 40)
+                    const availableWidth = pdfDoc.page.width - 80; // margen izquierdo + derecho
+                    let colWidths = [
+                        Math.round(availableWidth * 0.12), // Tipo
+                        Math.round(availableWidth * 0.36), // Producto
+                        Math.round(availableWidth * 0.07), // Cantidad
+                        Math.round(availableWidth * 0.18), // Responsable
+                        Math.round(availableWidth * 0.12), // Destino
+                        Math.round(availableWidth * 0.15)  // Fecha
+                    ];
+                    // Ajuste final por redondeo
+                    const totalCols = colWidths.reduce((s, v) => s + v, 0);
+                    if (totalCols !== availableWidth) {
+                        colWidths[colWidths.length - 1] += (availableWidth - totalCols);
+                    }
                     const colX = [40];
                     for (let i = 0; i < colWidths.length; i++) {
                         colX.push(colX[i] + colWidths[i]);
