@@ -351,9 +351,27 @@ MongoClient.connect(MONGO_URL)
                         return res.status(404).json({ error: 'Proyecto o movimientos no encontrados' });
                     }
                     const proyecto = doc.proyectos[proyectoIdx];
-                    // Asegura que movimientos es un array
+                    // Asegura que movimientos e inventario son arrays
                     const movimientosArr = Array.isArray(proyecto.movimientos) ? proyecto.movimientos : [];
-                    const movimientos = movimientosArr.filter((_, idx) => movimientosIdxs.includes(idx));
+                    const inventarioArr = Array.isArray(proyecto.inventario) ? proyecto.inventario : [];
+
+                    // Filtrar e normalizar movimientos solicitados
+                    const movimientos = movimientosArr
+                      .map((mov, idx) => ({ idx, mov }))
+                      .filter(({ idx }) => movimientosIdxs.includes(idx))
+                      .map(({ mov }) => ({
+                        tipo: mov.tipo || '',
+                        productoIdx: typeof mov.productoIdx === 'number' ? mov.productoIdx : -1,
+                        cantidad: mov.cantidad != null ? mov.cantidad : 0,
+                        responsable: mov.responsable || '',
+                        destino: mov.destino || '',
+                        fecha: mov.fecha ? new Date(mov.fecha) : new Date()
+                      }));
+
+                    if (movimientos.length === 0) {
+                        return res.status(404).json({ error: 'No se encontraron movimientos para los índices solicitados' });
+                    }
+
                     // Crear PDF
                     const PDFDocument = require('pdfkit');
                     const pdfDoc = new PDFDocument({ margin: 40 });
@@ -370,12 +388,12 @@ MongoClient.connect(MONGO_URL)
                     pdfDoc.rect(0, 0, pdfDoc.page.width, 80).fill('#2a4d8f');
                     pdfDoc.fillColor('#fff').fontSize(28).font('Helvetica-Bold').text('Naisata', 40, 25);
                     pdfDoc.fillColor('#2a4d8f').fontSize(18).font('Helvetica').text('Reporte de Movimientos de Inventario', 40, 100, { width: pdfDoc.page.width - 80 });
-                    pdfDoc.fontSize(13).fillColor('#333').text(`Proyecto: ${proyecto.nombre}`, 40, 130, { width: pdfDoc.page.width - 80 });
+                    pdfDoc.fontSize(13).fillColor('#333').text(`Proyecto: ${proyecto.nombre || 'N/D'}`, 40, 130, { width: pdfDoc.page.width - 80 });
                     pdfDoc.moveDown(2);
 
                     // Tabla de movimientos
                     const tableTop = pdfDoc.y;
-                    const colWidths = [70, 110, 60, 110, 110, 110];
+                    const colWidths = [70, 150, 60, 110, 110, 110];
                     const colX = [40];
                     for (let i = 0; i < colWidths.length; i++) {
                         colX.push(colX[i] + colWidths[i]);
@@ -389,20 +407,23 @@ MongoClient.connect(MONGO_URL)
                     pdfDoc.text('Fecha', colX[5], tableTop, { width: colWidths[5] });
                     pdfDoc.moveDown(1);
                     pdfDoc.font('Helvetica').fontSize(11);
-                    movimientos.forEach((mov, i) => {
-                        const prod = proyecto.inventario[mov.productoIdx];
+
+                    movimientos.forEach((mov) => {
+                        const prod = (mov.productoIdx >= 0 && inventarioArr[mov.productoIdx]) ? inventarioArr[mov.productoIdx] : null;
+                        const prodNombre = prod && prod.nombre ? prod.nombre : 'N/D';
                         const y = pdfDoc.y;
-                        pdfDoc.text(mov.tipo === 'salida' ? 'Salida' : 'Devolución', colX[0], y, { width: colWidths[0] });
-                        pdfDoc.text(prod ? prod.nombre : '', colX[1], y, { width: colWidths[1] });
+                        pdfDoc.text(mov.tipo === 'salida' ? 'Salida' : mov.tipo === 'entrada' ? 'Devolución' : mov.tipo, colX[0], y, { width: colWidths[0] });
+                        pdfDoc.text(prodNombre, colX[1], y, { width: colWidths[1] });
                         pdfDoc.text(String(mov.cantidad), colX[2], y, { width: colWidths[2] });
                         pdfDoc.text(mov.responsable, colX[3], y, { width: colWidths[3] });
                         pdfDoc.text(mov.destino, colX[4], y, { width: colWidths[4] });
                         pdfDoc.text(new Date(mov.fecha).toLocaleString(), colX[5], y, { width: colWidths[5] });
+
                         // Calcular la altura máxima de la fila para salto de línea
                         let maxHeight = 0;
                         [
-                            mov.tipo === 'salida' ? 'Salida' : 'Devolución',
-                            prod ? prod.nombre : '',
+                            mov.tipo === 'salida' ? 'Salida' : mov.tipo === 'entrada' ? 'Devolución' : mov.tipo,
+                            prodNombre,
                             String(mov.cantidad),
                             mov.responsable,
                             mov.destino,
@@ -411,8 +432,9 @@ MongoClient.connect(MONGO_URL)
                             const h = pdfDoc.heightOfString(txt, { width: colWidths[idx] });
                             if (h > maxHeight) maxHeight = h;
                         });
-                        pdfDoc.y += maxHeight + 2;
+                        pdfDoc.y += maxHeight + 4;
                     });
+
                     // Pie de página: línea para firma
                     pdfDoc.switchToPage(pdfDoc.page.index);
                     const pageHeight = pdfDoc.page.height;
@@ -422,6 +444,7 @@ MongoClient.connect(MONGO_URL)
 
                     pdfDoc.end();
                 } catch (err) {
+                    console.error('Error en /api/inventario/movimientos/pdf:', err);
                     res.status(500).json({ error: 'Error al generar PDF' });
                 }
             });
