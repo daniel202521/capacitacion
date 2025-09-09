@@ -47,7 +47,7 @@ MongoClient.connect(MONGO_URL)
         async function enviarCorreo(destino, asunto, mensaje) {
             try {
                 await transporter.sendMail({
-                    from: 'Inventario Naisata <' + (process.env.GMAIL_USER || 'tucorreo@gmail.com') + '>',
+                    from: 'Inventario Naisata <naisatasoluciones@gmail.com>',
                     to: destino,
                     subject: asunto,
                     html: mensaje
@@ -252,6 +252,12 @@ MongoClient.connect(MONGO_URL)
                                 `<h2>¡Hola ${usuarioDestino}!</h2><p>Se te ha transferido el proyecto <b>${proyecto.nombre}</b> en el sistema de inventario Naisata.</p>`
                             );
                         }
+                        // Emitir notificación por Socket.IO
+                        io.emit('proyecto-transferido', {
+                            destino: usuarioDestino,
+                            nombre: proyecto.nombre,
+                            origen: usuarioOrigen
+                        });
                         res.json({ mensaje: 'Proyecto transferido correctamente y notificación enviada' });
                     } catch (err) {
                         res.status(500).json({ error: 'Error al transferir proyecto' });
