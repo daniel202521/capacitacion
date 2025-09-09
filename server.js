@@ -30,6 +30,101 @@ MongoClient.connect(MONGO_URL)
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('Conectado a MongoDB y GridFS');
 
+        // Colección para inventario por usuario
+        const inventariosCol = db.collection('inventarios');
+
+        // ================== ENDPOINTS INVENTARIO POR PROYECTO Y USUARIO ==================
+
+        // Crear proyecto de inventario para usuario
+        app.post('/api/inventario/proyecto', async (req, res) => {
+            const { usuario, nombreProyecto } = req.body;
+            if (!usuario || !nombreProyecto) return res.status(400).json({ error: 'Faltan datos' });
+            try {
+                let doc = await inventariosCol.findOne({ usuario });
+                if (!doc) {
+                    // Crear documento nuevo para el usuario
+                    await inventariosCol.insertOne({ usuario, proyectos: [{ nombre: nombreProyecto, inventario: [] }] });
+                } else {
+                    // Agregar proyecto al array
+                    await inventariosCol.updateOne(
+                        { usuario },
+                        { $push: { proyectos: { nombre: nombreProyecto, inventario: [] } } }
+                    );
+                }
+                res.json({ mensaje: 'Proyecto creado' });
+            } catch (err) {
+                res.status(500).json({ error: 'Error al crear proyecto' });
+            }
+        });
+
+        // Obtener proyectos de inventario por usuario
+        app.get('/api/inventario/proyectos/:usuario', async (req, res) => {
+            const usuario = req.params.usuario;
+            try {
+                const doc = await inventariosCol.findOne({ usuario });
+                res.json({ proyectos: doc ? doc.proyectos : [] });
+            } catch (err) {
+                res.status(500).json({ error: 'Error al obtener proyectos' });
+            }
+        });
+
+        // Agregar item a un proyecto
+        app.post('/api/inventario/item', async (req, res) => {
+            const { usuario, proyectoIdx, nombre, cantidad } = req.body;
+            if (!usuario || proyectoIdx == null || !nombre || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            try {
+                const update = {};
+                update[`proyectos.${proyectoIdx}.inventario`] = { nombre, cantidad };
+                await inventariosCol.updateOne(
+                    { usuario },
+                    { $push: update }
+                );
+                res.json({ mensaje: 'Item agregado' });
+            } catch (err) {
+                res.status(500).json({ error: 'Error al agregar item' });
+            }
+        });
+
+        // Editar item de inventario
+        app.put('/api/inventario/item', async (req, res) => {
+            const { usuario, proyectoIdx, itemIdx, nombre, cantidad } = req.body;
+            if (!usuario || proyectoIdx == null || itemIdx == null || !nombre || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            try {
+                const update = {};
+                if (nombre !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.nombre`] = nombre;
+                if (cantidad !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.cantidad`] = cantidad;
+                await inventariosCol.updateOne(
+                    { usuario },
+                    { $set: update }
+                );
+                res.json({ mensaje: 'Item editado' });
+            } catch (err) {
+                res.status(500).json({ error: 'Error al editar item' });
+            }
+        });
+
+        // Eliminar item de inventario
+        app.delete('/api/inventario/item', async (req, res) => {
+            const { usuario, proyectoIdx, itemIdx } = req.body;
+            if (!usuario || proyectoIdx == null || itemIdx == null) return res.status(400).json({ error: 'Faltan datos' });
+            try {
+                // Usar $unset y luego $pull para limpiar nulls
+                const unsetField = `proyectos.${proyectoIdx}.inventario.${itemIdx}`;
+                await inventariosCol.updateOne(
+                    { usuario },
+                    { $unset: { [unsetField]: 1 } }
+                );
+                await inventariosCol.updateOne(
+                    { usuario },
+                    { $pull: { [`proyectos.${proyectoIdx}.inventario`]: null } }
+                );
+                res.json({ mensaje: 'Item eliminado' });
+            } catch (err) {
+                res.status(500).json({ error: 'Error al eliminar item' });
+            }
+        });
+
+
         // Iniciar servidor después de que la conexión a MongoDB esté lista
         const PORT = process.env.PORT || 3001;
         const HOST = '0.0.0.0';
