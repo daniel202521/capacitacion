@@ -44,6 +44,18 @@ MongoClient.connect(MONGO_URL)
         // Colección para inventario por usuario
         const inventariosCol = db.collection('inventarios');
 
+        // Helper: formatea fecha para PDF (DD/MM/YYYY HH:MM)
+        function formatDateForPDF(d) {
+            try {
+                const date = d ? new Date(d) : new Date();
+                const opts = { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' };
+                // 'es-ES' para formato  dd/mm/yyyy, quitar coma si la hay
+                return date.toLocaleString('es-ES', opts).replace(',', '');
+            } catch (e) {
+                return String(d);
+            }
+        }
+
         // Configuración SMTP Gmail
         const transporter = nodemailer.createTransport({
             service: 'gmail',
@@ -412,12 +424,13 @@ MongoClient.connect(MONGO_URL)
                         const prod = (mov.productoIdx >= 0 && inventarioArr[mov.productoIdx]) ? inventarioArr[mov.productoIdx] : null;
                         const prodNombre = prod && prod.nombre ? prod.nombre : 'N/D';
                         const y = pdfDoc.y;
+                        const fechaStr = formatDateForPDF(mov.fecha);
                         pdfDoc.text(mov.tipo === 'salida' ? 'Salida' : mov.tipo === 'entrada' ? 'Devolución' : mov.tipo, colX[0], y, { width: colWidths[0] });
                         pdfDoc.text(prodNombre, colX[1], y, { width: colWidths[1] });
                         pdfDoc.text(String(mov.cantidad), colX[2], y, { width: colWidths[2] });
                         pdfDoc.text(mov.responsable, colX[3], y, { width: colWidths[3] });
                         pdfDoc.text(mov.destino, colX[4], y, { width: colWidths[4] });
-                        pdfDoc.text(new Date(mov.fecha).toLocaleString(), colX[5], y, { width: colWidths[5] });
+                        pdfDoc.text(fechaStr, colX[5], y, { width: colWidths[5] });
 
                         // Calcular la altura máxima de la fila para salto de línea
                         let maxHeight = 0;
@@ -427,7 +440,7 @@ MongoClient.connect(MONGO_URL)
                             String(mov.cantidad),
                             mov.responsable,
                             mov.destino,
-                            new Date(mov.fecha).toLocaleString()
+                            fechaStr
                         ].forEach((txt, idx) => {
                             const h = pdfDoc.heightOfString(txt, { width: colWidths[idx] });
                             if (h > maxHeight) maxHeight = h;
@@ -1578,8 +1591,10 @@ app.post('/api/inventario/movimiento/eliminar', async (req, res) => {
         );
         res.json({ mensaje: 'Movimiento eliminado' });
     } catch (err) {
-        console.error('Error eliminando movimiento:', err);
-        res.status(500).json({ error: 'Error al eliminar movimiento' });
+        // Log detallado para ver error real en Render
+        console.error(`[${new Date().toISOString()}] Error eliminando movimiento:`, err && err.stack ? err.stack : err);
+        // Responder con detalle mínimo para debugging en Render
+        res.status(500).json({ error: 'Error al eliminar movimiento', detail: err && err.message ? err.message : String(err) });
     }
 });
 
