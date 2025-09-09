@@ -114,6 +114,10 @@ app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Servir archivos estáticos (HTML, CSS, JS) desde la carpeta raíz
+const path = require('path');
+app.use(express.static(path.join(__dirname)));
+
 // Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
 app.post('/api/curso', upload.fields([
     { name: 'imagenes' },
