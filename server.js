@@ -1557,3 +1557,13 @@ app.post('/api/inventario/movimiento/eliminar', async (req, res) => {
         res.status(500).json({ error: 'Error al eliminar movimiento' });
     }
 });
+
+// Endpoint para obtener todos los inventarios completos (proyectos, productos, movimientos, usuarios)
+app.get('/api/inventarios/todo', async (req, res) => {
+    try {
+        const inventarios = await db.collection('inventarios').find({}).toArray();
+        res.json({ inventarios });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener todos los inventarios' });
+    }
+});
