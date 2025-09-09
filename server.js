@@ -436,8 +436,9 @@ MongoClient.connect(MONGO_URL)
                     });
 
                     // Pie de página: línea para firma
-                    pdfDoc.switchToPage(pdfDoc.page.index);
-                    const pageHeight = pdfDoc.page.height;
+                    // Evitar switchToPage(undefined). Obtener la página actual de forma segura y dibujar el pie.
+                    const currentPage = pdfDoc.page;
+                    const pageHeight = (currentPage && currentPage.height) ? currentPage.height : (pdfDoc.pageSize ? pdfDoc.pageSize[1] : 792);
                     const firmaY = pageHeight - 60;
                     pdfDoc.font('Helvetica').fontSize(13).text('Firma:', 40, firmaY);
                     pdfDoc.moveTo(100, firmaY + 15).lineTo(300, firmaY + 15).stroke();
