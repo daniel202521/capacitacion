@@ -412,10 +412,12 @@ MongoClient.connect(MONGO_URL)
                         pdfDoc.y += maxHeight + 2;
                     });
 
-                    // Línea para firma
-                    pdfDoc.moveDown(3);
-                    pdfDoc.font('Helvetica').fontSize(13).text('Firma:', 40, pdfDoc.y + 10);
-                    pdfDoc.moveTo(100, pdfDoc.y + 25).lineTo(300, pdfDoc.y + 25).stroke();
+                    // Pie de página: línea para firma
+                    pdfDoc.switchToPage(pdfDoc.page.index); // Asegura que está en la última página
+                    const pageHeight = pdfDoc.page.height;
+                    const firmaY = pageHeight - 60;
+                    pdfDoc.font('Helvetica').fontSize(13).text('Firma:', 40, firmaY);
+                    pdfDoc.moveTo(100, firmaY + 15).lineTo(300, firmaY + 15).stroke();
 
                     pdfDoc.end();
                 } catch (err) {
