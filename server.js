@@ -177,8 +177,8 @@ MongoClient.connect(MONGO_URL)
                     if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx] || !doc.proyectos[proyectoIdx].movimientos) {
                         return res.status(404).json({ error: 'Proyecto o movimientos no encontrados' });
                     }
-                    const movimientos = doc.proyectos[proyectoIdx].movimientos.filter((_, idx) => movimientosIdxs.includes(idx));
-
+                    const proyecto = doc.proyectos[proyectoIdx];
+                    const movimientos = proyecto.movimientos.filter((_, idx) => movimientosIdxs.includes(idx));
                     // Crear PDF
                     const pdfDoc = new PDFDocument({ margin: 40 });
                     let buffers = [];
@@ -190,21 +190,35 @@ MongoClient.connect(MONGO_URL)
                         res.send(pdfData);
                     });
 
-                    // Diseño profesional (pade)
+                    // Encabezado y título
                     pdfDoc.rect(0, 0, pdfDoc.page.width, 80).fill('#2a4d8f');
                     pdfDoc.fillColor('#fff').fontSize(28).font('Helvetica-Bold').text('Naisata', 40, 25);
                     pdfDoc.fillColor('#2a4d8f').fontSize(18).font('Helvetica').text('Reporte de Movimientos de Inventario', 40, 100);
+                    pdfDoc.fontSize(13).fillColor('#333').text(`Proyecto: ${proyecto.nombre}`, 40, 130);
                     pdfDoc.moveDown(2);
 
+                    // Tabla de movimientos
+                    const startY = pdfDoc.y;
+                    const colX = [40, 120, 220, 300, 420, 520, 620];
+                    pdfDoc.font('Helvetica-Bold').fontSize(12);
+                    pdfDoc.text('Tipo', colX[0], startY);
+                    pdfDoc.text('Producto', colX[1], startY);
+                    pdfDoc.text('Cantidad', colX[2], startY);
+                    pdfDoc.text('Responsable', colX[3], startY);
+                    pdfDoc.text('Destino', colX[4], startY);
+                    pdfDoc.text('Fecha', colX[5], startY);
+                    pdfDoc.moveDown(0.5);
+                    pdfDoc.font('Helvetica').fontSize(11);
                     movimientos.forEach((mov, i) => {
-                        pdfDoc.fillColor('#333').fontSize(14).font('Helvetica-Bold').text(`Movimiento #${i + 1}`, { underline: true });
-                        pdfDoc.font('Helvetica').fontSize(12);
-                        pdfDoc.text(`Tipo: ${mov.tipo === 'salida' ? 'Salida' : 'Entrada'}`);
-                        pdfDoc.text(`Cantidad: ${mov.cantidad}`);
-                        pdfDoc.text(`Responsable: ${mov.responsable}`);
-                        pdfDoc.text(`Destino: ${mov.destino}`);
-                        pdfDoc.text(`Fecha: ${new Date(mov.fecha).toLocaleString()}`);
-                        pdfDoc.moveDown(1);
+                        const prod = proyecto.inventario[mov.productoIdx];
+                        const y = pdfDoc.y;
+                        pdfDoc.text(mov.tipo === 'salida' ? 'Salida' : 'Devolución', colX[0], y);
+                        pdfDoc.text(prod ? prod.nombre : '', colX[1], y);
+                        pdfDoc.text(String(mov.cantidad), colX[2], y);
+                        pdfDoc.text(mov.responsable, colX[3], y);
+                        pdfDoc.text(mov.destino, colX[4], y);
+                        pdfDoc.text(new Date(mov.fecha).toLocaleString(), colX[5], y);
+                        pdfDoc.moveDown(0.5);
                     });
 
                     pdfDoc.end();
