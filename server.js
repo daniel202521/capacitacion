@@ -346,12 +346,14 @@ MongoClient.connect(MONGO_URL)
                 const { usuario, proyectoIdx, movimientosIdxs } = req.body;
                 if (!usuario || proyectoIdx == null || !Array.isArray(movimientosIdxs)) return res.status(400).json({ error: 'Faltan datos' });
                 try {
-                    const doc = await inventariosCol.findOne({ usuario });
-                    if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx] || !doc.proyectos[proyectoIdx].movimientos) {
+                    const doc = await db.collection('inventarios').findOne({ usuario });
+                    if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx]) {
                         return res.status(404).json({ error: 'Proyecto o movimientos no encontrados' });
                     }
                     const proyecto = doc.proyectos[proyectoIdx];
-                    const movimientos = proyecto.movimientos.filter((_, idx) => movimientosIdxs.includes(idx));
+                    // Asegura que movimientos es un array
+                    const movimientosArr = Array.isArray(proyecto.movimientos) ? proyecto.movimientos : [];
+                    const movimientos = movimientosArr.filter((_, idx) => movimientosIdxs.includes(idx));
                     // Crear PDF
                     const PDFDocument = require('pdfkit');
                     const pdfDoc = new PDFDocument({ margin: 40 });
@@ -371,7 +373,7 @@ MongoClient.connect(MONGO_URL)
                     pdfDoc.fontSize(13).fillColor('#333').text(`Proyecto: ${proyecto.nombre}`, 40, 130, { width: pdfDoc.page.width - 80 });
                     pdfDoc.moveDown(2);
 
-                    // Tabla de movimientos con salto de línea si el campo es largo
+                    // Tabla de movimientos
                     const tableTop = pdfDoc.y;
                     const colWidths = [70, 110, 60, 110, 110, 110];
                     const colX = [40];
@@ -411,9 +413,8 @@ MongoClient.connect(MONGO_URL)
                         });
                         pdfDoc.y += maxHeight + 2;
                     });
-
                     // Pie de página: línea para firma
-                    pdfDoc.switchToPage(pdfDoc.page.index); // Asegura que está en la última página
+                    pdfDoc.switchToPage(pdfDoc.page.index);
                     const pageHeight = pdfDoc.page.height;
                     const firmaY = pageHeight - 60;
                     pdfDoc.font('Helvetica').fontSize(13).text('Firma:', 40, firmaY);
