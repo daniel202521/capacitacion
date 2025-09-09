@@ -1521,7 +1521,7 @@ app.delete('/api/admin/ticket/:id', async (req, res) => {
 });
 
 // Eliminar movimiento de inventario por índice
-app.delete('/api/inventario/movimiento/eliminar', async (req, res) => {
+app.post('/api/inventario/movimiento/eliminar', async (req, res) => {
     const { usuario, proyectoIdx, movIdx } = req.body;
     if (!usuario || proyectoIdx == null || movIdx == null) return res.status(400).json({ error: 'Faltan datos' });
     try {
