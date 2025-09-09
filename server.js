@@ -140,11 +140,16 @@ MongoClient.connect(MONGO_URL)
 
         // Agregar item a un proyecto
         app.post('/api/inventario/item', async (req, res) => {
-            const { usuario, proyectoIdx, nombre, parte, ubicacion, cantidad } = req.body;
-            if (!usuario || proyectoIdx == null || !nombre || !parte || !ubicacion || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            let { usuario, proyectoIdx, nombre, marca, parte, ubicacion, cantidad } = req.body;
+            if (!usuario || proyectoIdx == null || !nombre || !marca || !parte || !ubicacion || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            // Guardar todo en mayúsculas
+            nombre = nombre.toUpperCase();
+            marca = marca.toUpperCase();
+            parte = parte.toUpperCase();
+            ubicacion = ubicacion.toUpperCase();
             try {
                 const update = {};
-                update[`proyectos.${proyectoIdx}.inventario`] = { nombre, parte, ubicacion, cantidad };
+                update[`proyectos.${proyectoIdx}.inventario`] = { nombre, marca, parte, ubicacion, cantidad };
                 await inventariosCol.updateOne(
                     { usuario },
                     { $push: update }
@@ -157,11 +162,17 @@ MongoClient.connect(MONGO_URL)
 
         // Editar item de inventario
         app.put('/api/inventario/item', async (req, res) => {
-            const { usuario, proyectoIdx, itemIdx, nombre, parte, ubicacion, cantidad } = req.body;
-            if (!usuario || proyectoIdx == null || itemIdx == null || !nombre || !parte || !ubicacion || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            let { usuario, proyectoIdx, itemIdx, nombre, marca, parte, ubicacion, cantidad } = req.body;
+            if (!usuario || proyectoIdx == null || itemIdx == null || !nombre || !marca || !parte || !ubicacion || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            // Guardar todo en mayúsculas
+            nombre = nombre.toUpperCase();
+            marca = marca.toUpperCase();
+            parte = parte.toUpperCase();
+            ubicacion = ubicacion.toUpperCase();
             try {
                 const update = {};
                 if (nombre !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.nombre`] = nombre;
+                if (marca !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.marca`] = marca;
                 if (parte !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.parte`] = parte;
                 if (ubicacion !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.ubicacion`] = ubicacion;
                 if (cantidad !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.cantidad`] = cantidad;
@@ -330,7 +341,6 @@ MongoClient.connect(MONGO_URL)
         });
 
             // Descargar PDF de movimientos seleccionados con diseño profesional y nombre de la empresa Naisata
-            const PDFDocument = require('pdfkit');
             app.post('/api/inventario/movimientos/pdf', async (req, res) => {
                 const { usuario, proyectoIdx, movimientosIdxs } = req.body;
                 if (!usuario || proyectoIdx == null || !Array.isArray(movimientosIdxs)) return res.status(400).json({ error: 'Faltan datos' });
@@ -342,6 +352,7 @@ MongoClient.connect(MONGO_URL)
                     const proyecto = doc.proyectos[proyectoIdx];
                     const movimientos = proyecto.movimientos.filter((_, idx) => movimientosIdxs.includes(idx));
                     // Crear PDF
+                    const PDFDocument = require('pdfkit');
                     const pdfDoc = new PDFDocument({ margin: 40 });
                     let buffers = [];
                     pdfDoc.on('data', buffers.push.bind(buffers));
@@ -355,33 +366,55 @@ MongoClient.connect(MONGO_URL)
                     // Encabezado y título
                     pdfDoc.rect(0, 0, pdfDoc.page.width, 80).fill('#2a4d8f');
                     pdfDoc.fillColor('#fff').fontSize(28).font('Helvetica-Bold').text('Naisata', 40, 25);
-                    pdfDoc.fillColor('#2a4d8f').fontSize(18).font('Helvetica').text('Reporte de Movimientos de Inventario', 40, 100);
-                    pdfDoc.fontSize(13).fillColor('#333').text(`Proyecto: ${proyecto.nombre}`, 40, 130);
+                    pdfDoc.fillColor('#2a4d8f').fontSize(18).font('Helvetica').text('Reporte de Movimientos de Inventario', 40, 100, { width: pdfDoc.page.width - 80 });
+                    pdfDoc.fontSize(13).fillColor('#333').text(`Proyecto: ${proyecto.nombre}`, 40, 130, { width: pdfDoc.page.width - 80 });
                     pdfDoc.moveDown(2);
 
-                    // Tabla de movimientos
-                    const startY = pdfDoc.y;
-                    const colX = [40, 120, 220, 300, 420, 520, 620];
+                    // Tabla de movimientos con salto de línea si el campo es largo
+                    const tableTop = pdfDoc.y;
+                    const colWidths = [70, 110, 60, 110, 110, 110];
+                    const colX = [40];
+                    for (let i = 0; i < colWidths.length; i++) {
+                        colX.push(colX[i] + colWidths[i]);
+                    }
                     pdfDoc.font('Helvetica-Bold').fontSize(12);
-                    pdfDoc.text('Tipo', colX[0], startY);
-                    pdfDoc.text('Producto', colX[1], startY);
-                    pdfDoc.text('Cantidad', colX[2], startY);
-                    pdfDoc.text('Responsable', colX[3], startY);
-                    pdfDoc.text('Destino', colX[4], startY);
-                    pdfDoc.text('Fecha', colX[5], startY);
-                    pdfDoc.moveDown(0.5);
+                    pdfDoc.text('Tipo', colX[0], tableTop, { width: colWidths[0] });
+                    pdfDoc.text('Producto', colX[1], tableTop, { width: colWidths[1] });
+                    pdfDoc.text('Cantidad', colX[2], tableTop, { width: colWidths[2] });
+                    pdfDoc.text('Responsable', colX[3], tableTop, { width: colWidths[3] });
+                    pdfDoc.text('Destino', colX[4], tableTop, { width: colWidths[4] });
+                    pdfDoc.text('Fecha', colX[5], tableTop, { width: colWidths[5] });
+                    pdfDoc.moveDown(1);
                     pdfDoc.font('Helvetica').fontSize(11);
                     movimientos.forEach((mov, i) => {
                         const prod = proyecto.inventario[mov.productoIdx];
                         const y = pdfDoc.y;
-                        pdfDoc.text(mov.tipo === 'salida' ? 'Salida' : 'Devolución', colX[0], y);
-                        pdfDoc.text(prod ? prod.nombre : '', colX[1], y);
-                        pdfDoc.text(String(mov.cantidad), colX[2], y);
-                        pdfDoc.text(mov.responsable, colX[3], y);
-                        pdfDoc.text(mov.destino, colX[4], y);
-                        pdfDoc.text(new Date(mov.fecha).toLocaleString(), colX[5], y);
-                        pdfDoc.moveDown(0.5);
+                        pdfDoc.text(mov.tipo === 'salida' ? 'Salida' : 'Devolución', colX[0], y, { width: colWidths[0] });
+                        pdfDoc.text(prod ? prod.nombre : '', colX[1], y, { width: colWidths[1] });
+                        pdfDoc.text(String(mov.cantidad), colX[2], y, { width: colWidths[2] });
+                        pdfDoc.text(mov.responsable, colX[3], y, { width: colWidths[3] });
+                        pdfDoc.text(mov.destino, colX[4], y, { width: colWidths[4] });
+                        pdfDoc.text(new Date(mov.fecha).toLocaleString(), colX[5], y, { width: colWidths[5] });
+                        // Calcular la altura máxima de la fila para salto de línea
+                        let maxHeight = 0;
+                        [
+                            mov.tipo === 'salida' ? 'Salida' : 'Devolución',
+                            prod ? prod.nombre : '',
+                            String(mov.cantidad),
+                            mov.responsable,
+                            mov.destino,
+                            new Date(mov.fecha).toLocaleString()
+                        ].forEach((txt, idx) => {
+                            const h = pdfDoc.heightOfString(txt, { width: colWidths[idx] });
+                            if (h > maxHeight) maxHeight = h;
+                        });
+                        pdfDoc.y += maxHeight + 2;
                     });
+
+                    // Línea para firma
+                    pdfDoc.moveDown(3);
+                    pdfDoc.font('Helvetica').fontSize(13).text('Firma:', 40, pdfDoc.y + 10);
+                    pdfDoc.moveTo(100, pdfDoc.y + 25).lineTo(300, pdfDoc.y + 25).stroke();
 
                     pdfDoc.end();
                 } catch (err) {
