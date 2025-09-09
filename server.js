@@ -70,36 +70,38 @@ MongoClient.connect(MONGO_URL)
 
         // Agregar item a un proyecto
         app.post('/api/inventario/item', async (req, res) => {
-            const { usuario, proyectoIdx, nombre, cantidad } = req.body;
-            if (!usuario || proyectoIdx == null || !nombre || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            const { usuario, proyectoIdx, nombre, parte, ubicacion, cantidad } = req.body;
+            if (!usuario || proyectoIdx == null || !nombre || !parte || !ubicacion || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
             try {
                 const update = {};
-                update[`proyectos.${proyectoIdx}.inventario`] = { nombre, cantidad };
+                update[`proyectos.${proyectoIdx}.inventario`] = { nombre, parte, ubicacion, cantidad };
                 await inventariosCol.updateOne(
                     { usuario },
                     { $push: update }
                 );
-                res.json({ mensaje: 'Item agregado' });
+                res.json({ mensaje: 'Producto agregado' });
             } catch (err) {
-                res.status(500).json({ error: 'Error al agregar item' });
+                res.status(500).json({ error: 'Error al agregar producto' });
             }
         });
 
         // Editar item de inventario
         app.put('/api/inventario/item', async (req, res) => {
-            const { usuario, proyectoIdx, itemIdx, nombre, cantidad } = req.body;
-            if (!usuario || proyectoIdx == null || itemIdx == null || !nombre || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
+            const { usuario, proyectoIdx, itemIdx, nombre, parte, ubicacion, cantidad } = req.body;
+            if (!usuario || proyectoIdx == null || itemIdx == null || !nombre || !parte || !ubicacion || cantidad == null) return res.status(400).json({ error: 'Faltan datos' });
             try {
                 const update = {};
                 if (nombre !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.nombre`] = nombre;
+                if (parte !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.parte`] = parte;
+                if (ubicacion !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.ubicacion`] = ubicacion;
                 if (cantidad !== undefined) update[`proyectos.${proyectoIdx}.inventario.${itemIdx}.cantidad`] = cantidad;
                 await inventariosCol.updateOne(
                     { usuario },
                     { $set: update }
                 );
-                res.json({ mensaje: 'Item editado' });
+                res.json({ mensaje: 'Producto editado' });
             } catch (err) {
-                res.status(500).json({ error: 'Error al editar item' });
+                res.status(500).json({ error: 'Error al editar producto' });
             }
         });
 
@@ -118,9 +120,50 @@ MongoClient.connect(MONGO_URL)
                     { usuario },
                     { $pull: { [`proyectos.${proyectoIdx}.inventario`]: null } }
                 );
-                res.json({ mensaje: 'Item eliminado' });
+                res.json({ mensaje: 'Producto eliminado' });
             } catch (err) {
-                res.status(500).json({ error: 'Error al eliminar item' });
+                res.status(500).json({ error: 'Error al eliminar producto' });
+            }
+        });
+        // Registrar movimiento de inventario (salida/entrada)
+        app.post('/api/inventario/movimiento', async (req, res) => {
+            const { usuario, proyectoIdx, productoIdx, tipo, cantidad, responsable, destino } = req.body;
+            if (!usuario || proyectoIdx == null || productoIdx == null || !tipo || cantidad == null || !responsable || !destino) return res.status(400).json({ error: 'Faltan datos' });
+            try {
+                // Obtener inventario actual
+                const doc = await inventariosCol.findOne({ usuario });
+                if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx] || !doc.proyectos[proyectoIdx].inventario[productoIdx]) {
+                    return res.status(404).json({ error: 'Producto no encontrado' });
+                }
+                const producto = doc.proyectos[proyectoIdx].inventario[productoIdx];
+                let nuevaCantidad = producto.cantidad;
+                if (tipo === 'salida') {
+                    nuevaCantidad -= cantidad;
+                    if (nuevaCantidad < 0) return res.status(400).json({ error: 'No hay suficiente cantidad en inventario' });
+                } else if (tipo === 'entrada') {
+                    nuevaCantidad += cantidad;
+                }
+                // Actualizar cantidad
+                await inventariosCol.updateOne(
+                    { usuario },
+                    { $set: { [`proyectos.${proyectoIdx}.inventario.${productoIdx}.cantidad`]: nuevaCantidad } }
+                );
+                // Registrar movimiento
+                const movimiento = {
+                    tipo,
+                    productoIdx,
+                    cantidad,
+                    responsable,
+                    destino,
+                    fecha: new Date()
+                };
+                await inventariosCol.updateOne(
+                    { usuario },
+                    { $push: { [`proyectos.${proyectoIdx}.movimientos`]: movimiento } }
+                );
+                res.json({ mensaje: 'Movimiento registrado' });
+            } catch (err) {
+                res.status(500).json({ error: 'Error al registrar movimiento' });
             }
         });
 
