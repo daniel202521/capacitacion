@@ -1519,3 +1519,28 @@ app.delete('/api/admin/ticket/:id', async (req, res) => {
         res.status(500).json({ error: 'Error al eliminar ticket' });
     }
 });
+
+// Eliminar movimiento de inventario por índice
+app.delete('/api/inventario/movimiento/eliminar', async (req, res) => {
+    const { usuario, proyectoIdx, movIdx } = req.body;
+    if (!usuario || proyectoIdx == null || movIdx == null) return res.status(400).json({ error: 'Faltan datos' });
+    try {
+        const doc = await inventariosCol.findOne({ usuario });
+        if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx] || !doc.proyectos[proyectoIdx].movimientos[movIdx]) {
+            return res.status(404).json({ error: 'Movimiento no encontrado' });
+        }
+        // Usar $unset y luego $pull para limpiar nulls
+        const unsetField = `proyectos.${proyectoIdx}.movimientos.${movIdx}`;
+        await inventariosCol.updateOne(
+            { usuario },
+            { $unset: { [unsetField]: 1 } }
+        );
+        await inventariosCol.updateOne(
+            { usuario },
+            { $pull: { [`proyectos.${proyectoIdx}.movimientos`]: null } }
+        );
+        res.json({ mensaje: 'Movimiento eliminado' });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar movimiento' });
+    }
+});
