@@ -23,12 +23,13 @@ const DB_NAME = 'capacitacion';
 let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
 
 const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
-const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s';
-webpush.setVapidDetails(
-    'mailto:naisatasoluciones@gmail.com',
-    VAPID_PUBLIC_KEY,
-    VAPID_PRIVATE_KEY
-);
+const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- Reemplaza por una clave privada VAPID válida
+// webpush.setVapidDetails(
+//     'mailto:naisatasoluciones@gmail.com',
+//     VAPID_PUBLIC_KEY,
+//     VAPID_PRIVATE_KEY
+// );
+// ADVERTENCIA: Debes generar una clave privada VAPID válida y descomentar la línea anterior.
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
