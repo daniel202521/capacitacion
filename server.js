@@ -34,6 +34,45 @@ MongoClient.connect(MONGO_URL)
         const inventariosCol = db.collection('inventarios');
 
         // ================== ENDPOINTS INVENTARIO POR PROYECTO Y USUARIO ==================
+        // Importar insumos desde archivo .json a un proyecto
+        const multerImport = multer({ storage: multer.memoryStorage() });
+        app.post('/api/inventario/importar-insumos', multerImport.single('archivo'), async (req, res) => {
+            const { usuario, proyectoIdx } = req.body;
+            if (!usuario || proyectoIdx == null || !req.file) return res.status(400).json({ error: 'Faltan datos o archivo' });
+            try {
+                const jsonStr = req.file.buffer.toString('utf8');
+                let insumos = [];
+                try {
+                    const parsed = JSON.parse(jsonStr);
+                    if (Array.isArray(parsed)) {
+                        insumos = parsed;
+                    } else if (typeof parsed === 'object') {
+                        insumos = [parsed];
+                    }
+                } catch (err) {
+                    return res.status(400).json({ error: 'Archivo JSON inválido' });
+                }
+                // Formatear insumos para inventario
+                const items = insumos.map(i => ({
+                    nombre: i.nombre || '',
+                    parte: i.numero_parte || '',
+                    ubicacion: i.ubicacion || '',
+                    cantidad: i.cantidad || 0,
+                    marca: i.marca || '',
+                    tipo: i.tipo || '',
+                    fecha: i.fecha || '',
+                    id: i.id || ''
+                }));
+                // Agregar insumos al inventario del proyecto
+                await inventariosCol.updateOne(
+                    { usuario },
+                    { $push: { [`proyectos.${proyectoIdx}.inventario`]: { $each: items } } }
+                );
+                res.json({ mensaje: 'Insumos importados correctamente', cantidad: items.length });
+            } catch (err) {
+                res.status(500).json({ error: 'Error al importar insumos' });
+            }
+        });
 
         // Crear proyecto de inventario para usuario
         app.post('/api/inventario/proyecto', async (req, res) => {
@@ -125,6 +164,68 @@ MongoClient.connect(MONGO_URL)
                 res.status(500).json({ error: 'Error al eliminar producto' });
             }
         });
+            // Eliminar proyecto solo si la contraseña es válida
+            app.post('/api/inventario/proyecto/eliminar', async (req, res) => {
+                const { usuario, proyectoIdx } = req.body;
+                if (!usuario || proyectoIdx == null) return res.status(400).json({ error: 'Faltan datos' });
+                try {
+                    // Elimina el proyecto del array
+                    const doc = await inventariosCol.findOne({ usuario });
+                    if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx]) {
+                        return res.status(404).json({ error: 'Proyecto no encontrado' });
+                    }
+                    // Usar $unset y luego $pull para limpiar nulls
+                    const unsetField = `proyectos.${proyectoIdx}`;
+                    await inventariosCol.updateOne(
+                        { usuario },
+                        { $unset: { [unsetField]: 1 } }
+                    );
+                    await inventariosCol.updateOne(
+                        { usuario },
+                        { $pull: { proyectos: null } }
+                    );
+                    res.json({ mensaje: 'Proyecto eliminado' });
+                } catch (err) {
+                    res.status(500).json({ error: 'Error al eliminar proyecto' });
+                }
+            });
+                // Transferir proyecto a otro usuario
+                app.post('/api/inventario/proyecto/transferir', async (req, res) => {
+                    const { usuarioOrigen, proyectoIdx, usuarioDestino } = req.body;
+                    if (!usuarioOrigen || proyectoIdx == null || !usuarioDestino) return res.status(400).json({ error: 'Faltan datos' });
+                    try {
+                        // Buscar proyecto en usuario origen
+                        const docOrigen = await inventariosCol.findOne({ usuario: usuarioOrigen });
+                        if (!docOrigen || !docOrigen.proyectos || !docOrigen.proyectos[proyectoIdx]) {
+                            return res.status(404).json({ error: 'Proyecto no encontrado en usuario origen' });
+                        }
+                        const proyecto = docOrigen.proyectos[proyectoIdx];
+                        // Quitar proyecto del usuario origen
+                        const unsetField = `proyectos.${proyectoIdx}`;
+                        await inventariosCol.updateOne(
+                            { usuario: usuarioOrigen },
+                            { $unset: { [unsetField]: 1 } }
+                        );
+                        await inventariosCol.updateOne(
+                            { usuario: usuarioOrigen },
+                            { $pull: { proyectos: null } }
+                        );
+                        // Agregar proyecto al usuario destino
+                        const docDestino = await inventariosCol.findOne({ usuario: usuarioDestino });
+                        if (!docDestino) {
+                            // Si no existe, crear documento nuevo
+                            await inventariosCol.insertOne({ usuario: usuarioDestino, proyectos: [proyecto] });
+                        } else {
+                            await inventariosCol.updateOne(
+                                { usuario: usuarioDestino },
+                                { $push: { proyectos: proyecto } }
+                            );
+                        }
+                        res.json({ mensaje: 'Proyecto transferido correctamente' });
+                    } catch (err) {
+                        res.status(500).json({ error: 'Error al transferir proyecto' });
+                    }
+                });
         // Registrar movimiento de inventario (salida/entrada)
         app.post('/api/inventario/movimiento', async (req, res) => {
             const { usuario, proyectoIdx, productoIdx, tipo, cantidad, responsable, destino } = req.body;
