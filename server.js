@@ -18,7 +18,7 @@ const io = new Server(server, {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, proyectosCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
@@ -27,68 +27,8 @@ MongoClient.connect(MONGO_URL)
         usuariosCol = db.collection('usuarios');
         sitiosCol = db.collection('sitios'); // <-- nueva colección
         adminTicketsCol = db.collection('adminTickets'); // <-- colección para tickets administrativos
-    proyectosCol = db.collection('proyectos'); // <-- colección para proyectos de inventario
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('Conectado a MongoDB y GridFS');
-// --- ENDPOINTS DE INVENTARIO POR PROYECTO ---
-
-// Crear proyecto
-app.post('/api/proyecto', async (req, res) => {
-    try {
-        const { nombre, descripcion } = req.body;
-        if (!nombre) return res.status(400).json({ error: 'Nombre requerido' });
-        const result = await proyectosCol.insertOne({ nombre, descripcion, insumos: [] });
-        res.json({ mensaje: 'Proyecto creado', id: result.insertedId });
-    } catch (err) {
-        res.status(500).json({ error: 'Error al crear proyecto' });
-    }
-});
-
-// Listar proyectos
-app.get('/api/proyectos', async (req, res) => {
-    try {
-        const proyectos = await proyectosCol.find({}).toArray();
-        proyectos.forEach(p => p.id = p._id.toString());
-        res.json(proyectos);
-    } catch (err) {
-        res.status(500).json({ error: 'Error al leer proyectos' });
-    }
-});
-
-// Añadir insumo a proyecto
-app.post('/api/proyecto/:id/insumo', async (req, res) => {
-    try {
-        const id = req.params.id;
-        const { nombre, numeroParte, ubicacion, cantidad } = req.body;
-        if (!nombre || !numeroParte || !ubicacion || cantidad == null) {
-            return res.status(400).json({ error: 'Faltan datos del insumo' });
-        }
-        const insumo = { nombre, numeroParte, ubicacion, cantidad: Number(cantidad) };
-        const result = await proyectosCol.updateOne(
-            { _id: new ObjectId(id) },
-            { $push: { insumos: insumo } }
-        );
-        if (result.matchedCount === 1) {
-            res.json({ mensaje: 'Insumo añadido', insumo });
-        } else {
-            res.status(404).json({ error: 'Proyecto no encontrado' });
-        }
-    } catch (err) {
-        res.status(500).json({ error: 'Error al añadir insumo' });
-    }
-});
-
-// Listar insumos de un proyecto
-app.get('/api/proyecto/:id/insumos', async (req, res) => {
-    try {
-        const id = req.params.id;
-        const proyecto = await proyectosCol.findOne({ _id: new ObjectId(id) });
-        if (!proyecto) return res.status(404).json({ error: 'Proyecto no encontrado' });
-        res.json({ insumos: proyecto.insumos || [] });
-    } catch (err) {
-        res.status(500).json({ error: 'Error al obtener insumos' });
-    }
-});
 
         // Iniciar servidor después de que la conexión a MongoDB esté lista
         const PORT = process.env.PORT || 3001;
@@ -113,10 +53,6 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-// Servir archivos estáticos (HTML, CSS, JS) desde la carpeta raíz
-const path = require('path');
-app.use(express.static(path.join(__dirname)));
 
 // Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
 app.post('/api/curso', upload.fields([
