@@ -532,19 +532,13 @@ app.get('/api/cursos', async (req, res) => {
 
 // Registrar usuario en MongoDB
 app.post('/api/registrar', async (req, res) => {
-    const { usuario, password, correo } = req.body;
-    if (!usuario || !password || !correo) return res.status(400).json({ error: 'Faltan datos' });
+    const { usuario, password } = req.body;
+    if (!usuario || !password) return res.status(400).json({ error: 'Faltan datos' });
     try {
         const existe = await usuariosCol.findOne({ usuario });
         if (existe) return res.status(409).json({ error: 'Usuario ya existe' });
-        await usuariosCol.insertOne({ usuario, password, correo, progreso: {} });
-        // Enviar correo de bienvenida
-        await enviarCorreo(
-            correo,
-            'Bienvenido a Inventario Naisata',
-            `<h2>¡Bienvenido ${usuario}!</h2><p>Tu registro en el sistema de inventario Naisata fue exitoso.</p>`
-        );
-        res.json({ mensaje: 'Usuario registrado y correo enviado' });
+        await usuariosCol.insertOne({ usuario, password, progreso: {} });
+        res.json({ mensaje: 'Usuario registrado correctamente' });
     } catch (err) {
         res.status(500).json({ error: 'Error al registrar usuario' });
     }
