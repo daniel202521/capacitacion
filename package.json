@@ -22,7 +22,8 @@
     "nodemailer": "^6.10.1",
     "pdfkit": "^0.17.2",
     "socket.io": "^4.8.1",
-    "twilio": "^5.8.2"
+    "twilio": "^5.8.2",
+    "web-push": "^3.6.7"
   },
   "devDependencies": {
     "nodemon": "^3.1.10"
@@ -31,3 +32,4 @@
     "node": ">=18"
   }
 }
+
