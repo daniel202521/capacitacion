@@ -1,4 +1,5 @@
 const express = require('express');
+const nodemailer = require('nodemailer');
 const cors = require('cors');
 const multer = require('multer');
 const http = require('http');
@@ -25,15 +26,36 @@ MongoClient.connect(MONGO_URL)
         db = client.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
-        sitiosCol = db.collection('sitios'); // <-- nueva colección
-        adminTicketsCol = db.collection('adminTickets'); // <-- colección para tickets administrativos
+        sitiosCol = db.collection('sitios');
+        adminTicketsCol = db.collection('adminTickets');
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('Conectado a MongoDB y GridFS');
 
         // Colección para inventario por usuario
         const inventariosCol = db.collection('inventarios');
 
-        // ================== ENDPOINTS INVENTARIO POR PROYECTO Y USUARIO ==================
+        // Configuración SMTP Gmail
+        const transporter = nodemailer.createTransport({
+            service: 'gmail',
+            auth: {
+                user: 'naisatasoluciones@gmail.com',
+                pass: 'mmjxjczkksrzxzaq',
+            }
+        });
+
+        // Función para enviar correo
+        async function enviarCorreo(destino, asunto, mensaje) {
+            try {
+                await transporter.sendMail({
+                    from: 'Inventario Naisata <' + (process.env.GMAIL_USER || 'tucorreo@gmail.com') + '>',
+                    to: destino,
+                    subject: asunto,
+                    html: mensaje
+                });
+            } catch (err) {
+                console.error('Error enviando correo:', err);
+            }
+        }
         // Importar insumos desde archivo .json a un proyecto
         const multerImport = multer({ storage: multer.memoryStorage() });
         app.post('/api/inventario/importar-insumos', multerImport.single('archivo'), async (req, res) => {
@@ -221,7 +243,16 @@ MongoClient.connect(MONGO_URL)
                                 { $push: { proyectos: proyecto } }
                             );
                         }
-                        res.json({ mensaje: 'Proyecto transferido correctamente' });
+                        // Buscar correo del usuario destino
+                        const usuarioDoc = await usuariosCol.findOne({ usuario: usuarioDestino });
+                        if (usuarioDoc && usuarioDoc.correo) {
+                            await enviarCorreo(
+                                usuarioDoc.correo,
+                                'Te han transferido un proyecto',
+                                `<h2>¡Hola ${usuarioDestino}!</h2><p>Se te ha transferido el proyecto <b>${proyecto.nombre}</b> en el sistema de inventario Naisata.</p>`
+                            );
+                        }
+                        res.json({ mensaje: 'Proyecto transferido correctamente y notificación enviada' });
                     } catch (err) {
                         res.status(500).json({ error: 'Error al transferir proyecto' });
                     }
@@ -495,13 +526,19 @@ app.get('/api/cursos', async (req, res) => {
 
 // Registrar usuario en MongoDB
 app.post('/api/registrar', async (req, res) => {
-    const { usuario, password } = req.body;
-    if (!usuario || !password) return res.status(400).json({ error: 'Faltan datos' });
+    const { usuario, password, correo } = req.body;
+    if (!usuario || !password || !correo) return res.status(400).json({ error: 'Faltan datos' });
     try {
         const existe = await usuariosCol.findOne({ usuario });
         if (existe) return res.status(409).json({ error: 'Usuario ya existe' });
-        await usuariosCol.insertOne({ usuario, password, progreso: {} });
-        res.json({ mensaje: 'Usuario registrado' });
+        await usuariosCol.insertOne({ usuario, password, correo, progreso: {} });
+        // Enviar correo de bienvenida
+        await enviarCorreo(
+            correo,
+            'Bienvenido a Inventario Naisata',
+            `<h2>¡Bienvenido ${usuario}!</h2><p>Tu registro en el sistema de inventario Naisata fue exitoso.</p>`
+        );
+        res.json({ mensaje: 'Usuario registrado y correo enviado' });
     } catch (err) {
         res.status(500).json({ error: 'Error al registrar usuario' });
     }
