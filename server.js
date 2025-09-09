@@ -1522,13 +1522,23 @@ app.delete('/api/admin/ticket/:id', async (req, res) => {
 
 // Eliminar movimiento de inventario por índice
 app.post('/api/inventario/movimiento/eliminar', async (req, res) => {
-    const { usuario, proyectoIdx, movIdx } = req.body;
-    if (!usuario || proyectoIdx == null || movIdx == null) return res.status(400).json({ error: 'Faltan datos' });
     try {
+        let { usuario, proyectoIdx, movIdx } = req.body;
+        if (!usuario) return res.status(400).json({ error: 'Faltan datos' });
+        proyectoIdx = parseInt(proyectoIdx, 10);
+        movIdx = parseInt(movIdx, 10);
+        if (isNaN(proyectoIdx) || isNaN(movIdx)) return res.status(400).json({ error: 'Índices inválidos' });
+
         const doc = await inventariosCol.findOne({ usuario });
-        if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx] || !doc.proyectos[proyectoIdx].movimientos[movIdx]) {
+        if (!doc) return res.status(404).json({ error: 'Inventario de usuario no encontrado' });
+
+        const proyecto = Array.isArray(doc.proyectos) ? doc.proyectos[proyectoIdx] : null;
+        if (!proyecto) return res.status(404).json({ error: 'Proyecto no encontrado' });
+
+        if (!Array.isArray(proyecto.movimientos) || movIdx < 0 || movIdx >= proyecto.movimientos.length) {
             return res.status(404).json({ error: 'Movimiento no encontrado' });
         }
+
         // Usar $unset y luego $pull para limpiar nulls
         const unsetField = `proyectos.${proyectoIdx}.movimientos.${movIdx}`;
         await inventariosCol.updateOne(
@@ -1541,6 +1551,7 @@ app.post('/api/inventario/movimiento/eliminar', async (req, res) => {
         );
         res.json({ mensaje: 'Movimiento eliminado' });
     } catch (err) {
+        console.error('Error eliminando movimiento:', err);
         res.status(500).json({ error: 'Error al eliminar movimiento' });
     }
 });
