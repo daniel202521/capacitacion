@@ -7,6 +7,7 @@ const { Server } = require('socket.io');
 const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
 const stream = require('stream');
 const axios = require('axios'); // Agrega axios para llamadas HTTP
+const webpush = require('web-push');
 
 const app = express();
 const server = http.createServer(app);
@@ -20,6 +21,14 @@ const io = new Server(server, {
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
 let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
+
+const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
+const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s';
+webpush.setVapidDetails(
+    'mailto:naisatasoluciones@gmail.com',
+    VAPID_PUBLIC_KEY,
+    VAPID_PRIVATE_KEY
+);
 
 MongoClient.connect(MONGO_URL)
     .then(client => {
@@ -243,7 +252,7 @@ MongoClient.connect(MONGO_URL)
                                 { $push: { proyectos: proyecto } }
                             );
                         }
-                        // Buscar correo del usuario destino
+                        // Buscar correo y subscription push del usuario destino
                         const usuarioDoc = await usuariosCol.findOne({ usuario: usuarioDestino });
                         if (usuarioDoc && usuarioDoc.correo) {
                             await enviarCorreo(
@@ -258,6 +267,21 @@ MongoClient.connect(MONGO_URL)
                             nombre: proyecto.nombre,
                             origen: usuarioOrigen
                         });
+                        // Notificación push al usuario destino
+                        if (usuarioDoc && usuarioDoc.pushSubscription) {
+                            try {
+                                await webpush.sendNotification(
+                                    usuarioDoc.pushSubscription,
+                                    JSON.stringify({
+                                        title: '¡Te han transferido un proyecto!',
+                                        body: `Has recibido el proyecto "${proyecto.nombre}" de ${usuarioOrigen}.`,
+                                        icon: 'https://capacitacion-x7et.onrender.com/log.png'
+                                    })
+                                );
+                            } catch (err) {
+                                console.error('Error enviando push:', err);
+                            }
+                        }
                         res.json({ mensaje: 'Proyecto transferido correctamente y notificación enviada' });
                     } catch (err) {
                         res.status(500).json({ error: 'Error al transferir proyecto' });
