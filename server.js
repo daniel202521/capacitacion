@@ -167,6 +167,52 @@ MongoClient.connect(MONGO_URL)
             }
         });
 
+            // Descargar PDF de movimientos seleccionados con diseño profesional y nombre de la empresa Naisata
+            const PDFDocument = require('pdfkit');
+            app.post('/api/inventario/movimientos/pdf', async (req, res) => {
+                const { usuario, proyectoIdx, movimientosIdxs } = req.body;
+                if (!usuario || proyectoIdx == null || !Array.isArray(movimientosIdxs)) return res.status(400).json({ error: 'Faltan datos' });
+                try {
+                    const doc = await inventariosCol.findOne({ usuario });
+                    if (!doc || !doc.proyectos || !doc.proyectos[proyectoIdx] || !doc.proyectos[proyectoIdx].movimientos) {
+                        return res.status(404).json({ error: 'Proyecto o movimientos no encontrados' });
+                    }
+                    const movimientos = doc.proyectos[proyectoIdx].movimientos.filter((_, idx) => movimientosIdxs.includes(idx));
+
+                    // Crear PDF
+                    const pdfDoc = new PDFDocument({ margin: 40 });
+                    let buffers = [];
+                    pdfDoc.on('data', buffers.push.bind(buffers));
+                    pdfDoc.on('end', () => {
+                        const pdfData = Buffer.concat(buffers);
+                        res.setHeader('Content-Type', 'application/pdf');
+                        res.setHeader('Content-Disposition', 'attachment; filename="movimientos_naisata.pdf"');
+                        res.send(pdfData);
+                    });
+
+                    // Diseño profesional (pade)
+                    pdfDoc.rect(0, 0, pdfDoc.page.width, 80).fill('#2a4d8f');
+                    pdfDoc.fillColor('#fff').fontSize(28).font('Helvetica-Bold').text('Naisata', 40, 25);
+                    pdfDoc.fillColor('#2a4d8f').fontSize(18).font('Helvetica').text('Reporte de Movimientos de Inventario', 40, 100);
+                    pdfDoc.moveDown(2);
+
+                    movimientos.forEach((mov, i) => {
+                        pdfDoc.fillColor('#333').fontSize(14).font('Helvetica-Bold').text(`Movimiento #${i + 1}`, { underline: true });
+                        pdfDoc.font('Helvetica').fontSize(12);
+                        pdfDoc.text(`Tipo: ${mov.tipo === 'salida' ? 'Salida' : 'Entrada'}`);
+                        pdfDoc.text(`Cantidad: ${mov.cantidad}`);
+                        pdfDoc.text(`Responsable: ${mov.responsable}`);
+                        pdfDoc.text(`Destino: ${mov.destino}`);
+                        pdfDoc.text(`Fecha: ${new Date(mov.fecha).toLocaleString()}`);
+                        pdfDoc.moveDown(1);
+                    });
+
+                    pdfDoc.end();
+                } catch (err) {
+                    res.status(500).json({ error: 'Error al generar PDF' });
+                }
+            });
+
 
         // Iniciar servidor después de que la conexión a MongoDB esté lista
         const PORT = process.env.PORT || 3001;
