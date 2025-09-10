@@ -23,7 +23,7 @@ const SOCKET_IDLE_MS = 2 * 60 * 1000; // desconectar tras 2 minutos sin activida
 const SOCKET_CLEANUP_INTERVAL_MS = 30 * 1000; // revisar cada 30s
 
 // Periodicamente desconectar sockets inactivos
-setInterval(() => {
+const socketCleanupInterval = setInterval(() => {
     try {
         const now = Date.now();
         Object.keys(connectedSockets).forEach(id => {
@@ -42,6 +42,10 @@ setInterval(() => {
         console.error('Error en limpieza de sockets:', e);
     }
 }, SOCKET_CLEANUP_INTERVAL_MS);
+// Evita que el timer mantenga el proceso vivo cuando no hay actividad (por ejemplo en Render):
+if (typeof socketCleanupInterval.unref === 'function') {
+    try { socketCleanupInterval.unref(); } catch (e) { /* no crítico */ }
+}
 
 // Endpoint de diagnóstico de sockets
 app.get('/api/socket-status', (req, res) => {
