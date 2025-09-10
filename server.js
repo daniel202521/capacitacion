@@ -53,9 +53,52 @@ app.get('/api/socket-status', (req, res) => {
     }
 });
 
+// Endpoint para desconectar sockets manualmente
+// Uso: GET /api/socket-disconnect?id=<socketId>
+// O:  GET /api/socket-disconnect?olderThanMs=60000  -> desconecta sockets inactivos > 60s
+app.get('/api/socket-disconnect', (req, res) => {
+    try {
+        const id = req.query.id;
+        const olderThanMs = req.query.olderThanMs ? parseInt(req.query.olderThanMs, 10) : null;
+        const now = Date.now();
+        const disconnected = [];
+
+        if (id) {
+            const s = io.sockets.sockets.get(id);
+            if (s) {
+                try { s.disconnect(true); } catch (e) { /* ignore */ }
+            }
+            if (connectedSockets[id]) {
+                disconnected.push(id);
+                delete connectedSockets[id];
+            }
+        }
+
+        if (olderThanMs) {
+            Object.keys(connectedSockets).forEach(sid => {
+                const info = connectedSockets[sid];
+                if (now - info.lastSeen > olderThanMs) {
+                    const s = io.sockets.sockets.get(sid);
+                    if (s) {
+                        try { s.disconnect(true); } catch (e) { /* ignore */ }
+                    }
+                    disconnected.push(sid);
+                    delete connectedSockets[sid];
+                }
+            });
+        }
+
+        res.json({ disconnected, remaining: Object.keys(connectedSockets).length });
+    } catch (err) {
+        console.error('Error en /api/socket-disconnect:', err);
+        res.status(500).json({ error: 'Error desconectando sockets' });
+    }
+});
+
 // Connection manager: reconecta bajo demanda y cierra la conexión si hay inactividad
 let mongoClient = null;
-const IDLE_CLOSE_MS = 10 * 60 * 1000; // 10 minutos
+// Aumenta el tiempo para evitar reconexiones frecuentes (reduce picos de conexiones en Atlas)
+const IDLE_CLOSE_MS = 60 * 60 * 1000; // 60 minutos
 let idleTimer = null;
 async function ensureConnected() {
     if (db) {
@@ -63,7 +106,8 @@ async function ensureConnected() {
         return;
     }
     try {
-        mongoClient = await MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true });
+        // Limitar tamaño del pool para reducir conexiones simultáneas en Atlas
+        mongoClient = await MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true, maxPoolSize: 2, minPoolSize: 0 });
         db = mongoClient.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
@@ -155,7 +199,7 @@ app.get('/api/push-status', async (req, res) => {
     }
 });
 
-MongoClient.connect(MONGO_URL)
+MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true, maxPoolSize: 2, minPoolSize: 0 })
     .then(client => {
         // Guarda referencia al cliente y programa cierre por inactividad
         mongoClient = client;
@@ -948,15 +992,16 @@ const asesores = {}; // Cambia a objeto general
 const usuariosPorSocket = {};
 
 io.on('connection', (socket) => {
-    console.log('Cliente conectado vía Socket.IO');
-    // Registrar socket para diagnóstico y limpiar inactivos
     const addr = socket.handshake.address || (socket.request && socket.request.connection && socket.request.connection.remoteAddress) || 'unknown';
-    connectedSockets[socket.id] = { id: socket.id, lastSeen: Date.now(), addr, ua: socket.handshake.headers['user-agent'] || '' };
-    // Asegura conexión cuando hay un cliente socket y evita cierre por inactividad
-    (async () => { try { await ensureConnected(); } catch(e){ console.error('Error ensureConnected on socket connect', e); } })();
-    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+    const ua = socket.handshake.headers['user-agent'] || '';
+    console.log(`[socket] connect id=${socket.id} addr=${addr} ua="${ua}" time=${new Date().toISOString()}`);
+     // Registrar socket para diagnóstico y limpiar inactivos
+    connectedSockets[socket.id] = { id: socket.id, lastSeen: Date.now(), addr, ua };
+     // Asegura conexión cuando hay un cliente socket y evita cierre por inactividad
+     (async () => { try { await ensureConnected(); } catch(e){ console.error('Error ensureConnected on socket connect', e); } })();
+     if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
 
-    // Actualizar lastSeen en cualquier evento recibido
+     // Actualizar lastSeen en cualquier evento recibido
     socket.onAny((event, ...args) => {
         if (connectedSockets[socket.id]) connectedSockets[socket.id].lastSeen = Date.now();
     });
@@ -1006,6 +1051,9 @@ io.on('connection', (socket) => {
 
     // Limpieza al desconectar
     socket.on('disconnect', () => {
+        // Log de desconexión
+        const info = connectedSockets[socket.id] || {};
+        console.log(`[socket] disconnect id=${socket.id} addr=${info.addr || 'unknown'} ua="${info.ua || ''}" time=${new Date().toISOString()}`);
         // Elimina al asesor si se desconecta
         for (const usuario in asesores) {
             if (asesores[usuario] === socket.id) {
@@ -1613,6 +1661,7 @@ app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ evidenciasTrabajo: sitio.evidenciasTrabajo || [] });
     } catch (err) {
+
         res.status(500).json({ error: 'Error al obtener evidencias de trabajo' });
     }
 });
