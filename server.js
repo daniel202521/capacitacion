@@ -19,8 +19,28 @@ const io = new Server(server, {
 
 // Seguimiento de sockets para detectar conexiones fantasma e inactividad
 const connectedSockets = {};
-const SOCKET_IDLE_MS = 2 * 60 * 1000; // desconectar tras 2 minutos sin actividad
+const SOCKET_IDLE_MS = 3 * 60 * 1000; // desconectar tras 3 minutos sin actividad
 const SOCKET_CLEANUP_INTERVAL_MS = 30 * 1000; // revisar cada 30s
+
+// Función para cerrar MongoDB inmediatamente
+async function closeMongoNow() {
+    try {
+        if (mongoClient) {
+            await mongoClient.close();
+            mongoClient = null;
+            db = null;
+            cursosCol = null;
+            usuariosCol = null;
+            sitiosCol = null;
+            adminTicketsCol = null;
+            gfs = null;
+            if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+            console.log('MongoDB connection closed immediately by cleanup');
+        }
+    } catch (err) {
+        console.error('Error closing MongoDB immediately:', err);
+    }
+}
 
 // Periodicamente desconectar sockets inactivos
 const socketCleanupInterval = setInterval(() => {
@@ -38,6 +58,10 @@ const socketCleanupInterval = setInterval(() => {
                 delete connectedSockets[id];
             }
         });
+        // Si no quedan sockets conectados, cerrar MongoDB de inmediato
+        if (Object.keys(connectedSockets).length === 0) {
+            closeMongoNow().catch(e => console.error('closeMongoNow error:', e));
+        }
     } catch (e) {
         console.error('Error en limpieza de sockets:', e);
     }
@@ -1086,8 +1110,13 @@ io.on('connection', (socket) => {
         if (connectedSockets[socket.id]) {
             delete connectedSockets[socket.id];
         }
-        // Programar cierre por inactividad cuando los sockets se vayan
-        scheduleIdleClose();
+        // Si ya no hay sockets, cerrar MongoDB inmediatamente
+        if (Object.keys(connectedSockets).length === 0) {
+            closeMongoNow().catch(e => console.error('closeMongoNow error:', e));
+        } else {
+            // Programar cierre por inactividad cuando los sockets se vayan
+            scheduleIdleClose();
+        }
     });
 });
 
