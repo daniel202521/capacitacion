@@ -17,6 +17,101 @@ const io = new Server(server, {
     }
 });
 
+// Seguimiento de sockets para detectar conexiones fantasma e inactividad
+const connectedSockets = {};
+const SOCKET_IDLE_MS = 2 * 60 * 1000; // desconectar tras 2 minutos sin actividad
+const SOCKET_CLEANUP_INTERVAL_MS = 30 * 1000; // revisar cada 30s
+
+// Periodicamente desconectar sockets inactivos
+setInterval(() => {
+    try {
+        const now = Date.now();
+        Object.keys(connectedSockets).forEach(id => {
+            const info = connectedSockets[id];
+            if (!info) return;
+            if (now - info.lastSeen > SOCKET_IDLE_MS) {
+                const s = io.sockets.sockets.get(id);
+                if (s) {
+                    console.log(`[socket-cleanup] disconnecting idle socket ${id} addr=${info.addr}`);
+                    try { s.disconnect(true); } catch (e) { /* ignore */ }
+                }
+                delete connectedSockets[id];
+            }
+        });
+    } catch (e) {
+        console.error('Error en limpieza de sockets:', e);
+    }
+}, SOCKET_CLEANUP_INTERVAL_MS);
+
+// Endpoint de diagnóstico de sockets
+app.get('/api/socket-status', (req, res) => {
+    try {
+        const list = Object.values(connectedSockets).map(s => ({ id: s.id, addr: s.addr, ua: s.ua, lastSeenAgoMs: Date.now() - s.lastSeen }));
+        res.json({ count: io.sockets.sockets.size || 0, clientsCount: io.engine && io.engine.clientsCount ? io.engine.clientsCount : undefined, sockets: list });
+    } catch (e) {
+        res.status(500).json({ error: 'Error obteniendo estado de sockets' });
+    }
+});
+
+// Connection manager: reconecta bajo demanda y cierra la conexión si hay inactividad
+let mongoClient = null;
+const IDLE_CLOSE_MS = 10 * 60 * 1000; // 10 minutos
+let idleTimer = null;
+async function ensureConnected() {
+    if (db) {
+        scheduleIdleClose();
+        return;
+    }
+    try {
+        mongoClient = await MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true });
+        db = mongoClient.db(DB_NAME);
+        cursosCol = db.collection('cursos');
+        usuariosCol = db.collection('usuarios');
+        sitiosCol = db.collection('sitios');
+        adminTicketsCol = db.collection('adminTickets');
+        gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
+        console.log('MongoDB conectado bajo demanda');
+        scheduleIdleClose();
+    } catch (e) {
+        console.error('Error conectando a MongoDB en ensureConnected:', e);
+        throw e;
+    }
+}
+function scheduleIdleClose() {
+    if (idleTimer) clearTimeout(idleTimer);
+    idleTimer = setTimeout(async () => {
+        try {
+            if (mongoClient) {
+                await mongoClient.close();
+                mongoClient = null;
+                db = null;
+                cursosCol = null;
+                usuariosCol = null;
+                sitiosCol = null;
+                adminTicketsCol = null;
+                gfs = null;
+                console.log('MongoDB connection closed due to inactivity');
+            }
+        } catch (err) {
+            console.error('Error closing MongoDB connection:', err);
+        }
+    }, IDLE_CLOSE_MS);
+    // Permite que el proceso termine/suspenda aunque exista este timer
+    if (typeof idleTimer.unref === 'function') {
+        try { idleTimer.unref(); } catch (e) { /* no crítico */ }
+    }
+}
+
+// Middleware para asegurar conexión antes de cada petición HTTP
+app.use(async (req, res, next) => {
+    try {
+        await ensureConnected();
+        next();
+    } catch (e) {
+        next(e);
+    }
+});
+
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
@@ -31,18 +126,50 @@ const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- R
 // );
 // ADVERTENCIA: Debes generar una clave privada VAPID válida y descomentar la línea anterior.
 
+// Helper para enviar push con timeout y logging (evita que un envío bloquee el event loop)
+async function safeSendPush(subscription, payload, timeoutMs = 7000) {
+    if (!subscription) return false;
+    try {
+        const sendPromise = webpush.sendNotification(subscription, payload);
+        const result = await Promise.race([
+            sendPromise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error('push-timeout')), timeoutMs))
+        ]);
+        console.log('[push] enviado OK');
+        return true;
+    } catch (err) {
+        console.error('[push] error enviando notificación:', err && err.message ? err.message : err);
+        return false;
+    }
+}
+
+// Endpoint para revisar estado de suscripciones push en la base de datos
+app.get('/api/push-status', async (req, res) => {
+    try {
+        await ensureConnected();
+        const usersWithPush = await usuariosCol.find({ pushSubscription: { $exists: true, $ne: null } }).project({ usuario: 1, pushSubscription: 1 }).toArray();
+        res.json({ count: usersWithPush.length, users: usersWithPush.map(u => ({ usuario: u.usuario, hasPush: !!u.pushSubscription })) });
+    } catch (e) {
+        console.error('Error en /api/push-status:', e);
+        res.status(500).json({ error: 'Error obteniendo estado de push' });
+    }
+});
+
 MongoClient.connect(MONGO_URL)
     .then(client => {
-        db = client.db(DB_NAME);
-        cursosCol = db.collection('cursos');
-        usuariosCol = db.collection('usuarios');
-        sitiosCol = db.collection('sitios');
-        adminTicketsCol = db.collection('adminTickets');
-        gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
-        console.log('Conectado a MongoDB y GridFS');
+        // Guarda referencia al cliente y programa cierre por inactividad
+        mongoClient = client;
+         db = client.db(DB_NAME);
+         cursosCol = db.collection('cursos');
+         usuariosCol = db.collection('usuarios');
+         sitiosCol = db.collection('sitios');
+         adminTicketsCol = db.collection('adminTickets');
+         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
+         console.log('Conectado a MongoDB y GridFS');
+         scheduleIdleClose();
 
-        // Colección para inventario por usuario
-        const inventariosCol = db.collection('inventarios');
+         // Colección para inventario por usuario
+         const inventariosCol = db.collection('inventarios');
 
         // Helper: formatea fecha para PDF (DD/MM/YYYY HH:MM)
         function formatDateForPDF(d) {
@@ -294,16 +421,15 @@ MongoClient.connect(MONGO_URL)
                         // Notificación push al usuario destino
                         if (usuarioDoc && usuarioDoc.pushSubscription) {
                             try {
-                                await webpush.sendNotification(
-                                    usuarioDoc.pushSubscription,
-                                    JSON.stringify({
-                                        title: '¡Te han transferido un proyecto!',
-                                        body: `Has recibido el proyecto "${proyecto.nombre}" de ${usuarioOrigen}.`,
-                                        icon: 'https://capacitacion-x7et.onrender.com/log.png'
-                                    })
-                                );
+                                const payload = JSON.stringify({
+                                    title: '¡Te han transferido un proyecto!',
+                                    body: `Has recibido el proyecto "${proyecto.nombre}" de ${usuarioOrigen}.`,
+                                    icon: 'https://capacitacion-x7et.onrender.com/log.png'
+                                });
+                                const ok = await safeSendPush(usuarioDoc.pushSubscription, payload);
+                                if (!ok) console.warn('[push] fallo al enviar push a', usuarioDestino);
                             } catch (err) {
-                                console.error('Error enviando push:', err);
+                                console.error('Error en safeSendPush:', err);
                             }
                         }
                         res.json({ mensaje: 'Proyecto transferido correctamente y notificación enviada' });
@@ -823,6 +949,17 @@ const usuariosPorSocket = {};
 
 io.on('connection', (socket) => {
     console.log('Cliente conectado vía Socket.IO');
+    // Registrar socket para diagnóstico y limpiar inactivos
+    const addr = socket.handshake.address || (socket.request && socket.request.connection && socket.request.connection.remoteAddress) || 'unknown';
+    connectedSockets[socket.id] = { id: socket.id, lastSeen: Date.now(), addr, ua: socket.handshake.headers['user-agent'] || '' };
+    // Asegura conexión cuando hay un cliente socket y evita cierre por inactividad
+    (async () => { try { await ensureConnected(); } catch(e){ console.error('Error ensureConnected on socket connect', e); } })();
+    if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+
+    // Actualizar lastSeen en cualquier evento recibido
+    socket.onAny((event, ...args) => {
+        if (connectedSockets[socket.id]) connectedSockets[socket.id].lastSeen = Date.now();
+    });
 
     // El asesor se identifica
     socket.on('chat:soyAsesor', data => {
@@ -884,9 +1021,14 @@ io.on('connection', (socket) => {
             }
         }
         delete usuariosPorSocket[socket.id];
+        // Quitar de la lista de sockets conectados
+        if (connectedSockets[socket.id]) {
+            delete connectedSockets[socket.id];
+        }
+        // Programar cierre por inactividad cuando los sockets se vayan
+        scheduleIdleClose();
     });
 });
-
 
 // Recuperar contraseña (ahora actualiza la contraseña directamente)
 app.post('/api/recuperar-password', async (req, res) => {
@@ -1550,6 +1692,7 @@ app.post('/api/admin/ticket', async (req, res) => {
         if (!folio || !actividad || !responsable) return res.status(400).json({ error: 'Faltan datos' });
         const ticket = { folio, actividad, responsable, fecha: new Date() };
         const result = await adminTicketsCol.insertOne(ticket);
+       
         ticket.id = result.insertedId.toString();
         io.emit('adminTicketAgregado', ticket);
         res.json({ mensaje: 'Ticket creado', ticket });
