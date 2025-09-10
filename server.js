@@ -97,8 +97,8 @@ app.get('/api/socket-disconnect', (req, res) => {
 
 // Connection manager: reconecta bajo demanda y cierra la conexión si hay inactividad
 let mongoClient = null;
-// Aumenta el tiempo para evitar reconexiones frecuentes (reduce picos de conexiones en Atlas)
-const IDLE_CLOSE_MS = 60 * 60 * 1000; // 60 minutos
+// Cerrar rápido para que no haya conexiones cuando no se usa (1 minuto)
+const IDLE_CLOSE_MS = 1 * 60 * 1000; // 1 minuto
 let idleTimer = null;
 async function ensureConnected() {
     if (db) {
@@ -106,11 +106,13 @@ async function ensureConnected() {
         return;
     }
     try {
-        // Limitar tamaño del pool para reducir conexiones simultáneas en Atlas
-        mongoClient = await MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true, maxPoolSize: 2, minPoolSize: 0 });
+        // Limitar tamaño del pool para reducir conexiones simultáneas en Atlas (1 conexión)
+        mongoClient = await MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true, maxPoolSize: 1, minPoolSize: 0 });
         db = mongoClient.db(DB_NAME);
         cursosCol = db.collection('cursos');
         usuariosCol = db.collection('usuarios');
+        // Asegura que inventariosCol también esté disponible cuando conectemos bajo demanda
+        inventariosCol = db.collection('inventarios');
         sitiosCol = db.collection('sitios');
         adminTicketsCol = db.collection('adminTickets');
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
@@ -146,8 +148,11 @@ function scheduleIdleClose() {
     }
 }
 
-// Middleware para asegurar conexión antes de cada petición HTTP
+// Middleware: evita abrir conexión para sondas/OPTIONS y endpoints de diagnóstico
 app.use(async (req, res, next) => {
+    if (req.path === '/health' || req.method === 'OPTIONS' || req.path === '/api/socket-status' || req.path === '/api/socket-disconnect') {
+        return next();
+    }
     try {
         await ensureConnected();
         next();
@@ -199,13 +204,15 @@ app.get('/api/push-status', async (req, res) => {
     }
 });
 
-MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true, maxPoolSize: 2, minPoolSize: 0 })
+MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true, maxPoolSize: 1, minPoolSize: 0 })
     .then(client => {
         // Guarda referencia al cliente y programa cierre por inactividad
         mongoClient = client;
          db = client.db(DB_NAME);
          cursosCol = db.collection('cursos');
          usuariosCol = db.collection('usuarios');
+         // Crear inventariosCol global igual que en ensureConnected
+         inventariosCol = db.collection('inventarios');
          sitiosCol = db.collection('sitios');
          adminTicketsCol = db.collection('adminTickets');
          gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
@@ -213,8 +220,8 @@ MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true
          scheduleIdleClose();
 
          // Colección para inventario por usuario
-         const inventariosCol = db.collection('inventarios');
-
+         // (inventariosCol ya asignada globalmente)
+        
         // Helper: formatea fecha para PDF (DD/MM/YYYY HH:MM)
         function formatDateForPDF(d) {
             try {
@@ -997,6 +1004,8 @@ io.on('connection', (socket) => {
     console.log(`[socket] connect id=${socket.id} addr=${addr} ua="${ua}" time=${new Date().toISOString()}`);
      // Registrar socket para diagnóstico y limpiar inactivos
     connectedSockets[socket.id] = { id: socket.id, lastSeen: Date.now(), addr, ua };
+     // No forzar conexión a MongoDB al conectar sockets para evitar abrir conexiones por probes/falsos clientes
+     // Si se necesita DB en algún evento, las rutas/handlers deberán llamar a ensureConnected() antes.
      // Asegura conexión cuando hay un cliente socket y evita cierre por inactividad
      (async () => { try { await ensureConnected(); } catch(e){ console.error('Error ensureConnected on socket connect', e); } })();
      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
@@ -1661,7 +1670,6 @@ app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
         res.json({ evidenciasTrabajo: sitio.evidenciasTrabajo || [] });
     } catch (err) {
-
         res.status(500).json({ error: 'Error al obtener evidencias de trabajo' });
     }
 });
