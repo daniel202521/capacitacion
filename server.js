@@ -1934,7 +1934,3 @@ app.post('/api/sitio/empresa', upload.fields([
         res.status(500).json({ error: 'Error al crear empresa/sitio' });
     }
 });
-        console.error('Error en /api/sitio/empresa:', err);
-        res.status(500).json({ error: 'Error al crear empresa/sitio' });
-    }
-});
