@@ -143,6 +143,8 @@ async function ensureConnected() {
         // Asegura que inventariosCol también esté disponible cuando conectemos bajo demanda
         inventariosCol = db.collection('inventarios');
         sitiosCol = db.collection('sitios');
+        // NUEVO: colección separada para empresas (no son "sitios")
+        empresasCol = db.collection('empresas');
         adminTicketsCol = db.collection('adminTickets');
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('MongoDB conectado bajo demanda');
@@ -193,7 +195,7 @@ app.use(async (req, res, next) => {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, empresasCol;
 
 const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
 const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- Reemplaza por una clave privada VAPID válida
@@ -243,6 +245,8 @@ MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true
          // Crear inventariosCol global igual que en ensureConnected
          inventariosCol = db.collection('inventarios');
          sitiosCol = db.collection('sitios');
+         // NUEVO: colección separada para empresas
+         empresasCol = db.collection('empresas');
          adminTicketsCol = db.collection('adminTickets');
          gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
          console.log('Conectado a MongoDB y GridFS');
@@ -1858,7 +1862,20 @@ app.get('/api/inventarios/todo', async (req, res) => {
     }
 });
 
-// --- Nuevo endpoint: crear sitio/empresa con logo y fotos de entregables ---
+// --- Nuevo endpoint: obtener empresas (separado de sitios) ---
+app.get('/api/empresas', async (req, res) => {
+    try {
+        const empresas = await (empresasCol || db.collection('empresas')).find({}).toArray();
+        // Añade id legible
+        empresas.forEach(e => e.id = e._id ? e._id.toString() : undefined);
+        res.json(empresas);
+    } catch (err) {
+        console.error('Error en /api/empresas:', err);
+        res.status(500).json({ error: 'Error al leer empresas' });
+    }
+});
+
+// --- Nuevo endpoint: crear empresa (guarda en coleccion "empresas", no en "sitios") ---
 app.post('/api/sitio/empresa', upload.fields([
     { name: 'logo', maxCount: 1 },
     { name: 'entregables' }
@@ -1898,21 +1915,25 @@ app.post('/api/sitio/empresa', upload.fields([
             }
         }
 
-        // Crear documento sitio con logos y entregables
-        const sitioDoc = {
+        // Crear documento empresa (se guarda en colección "empresas")
+        const empresaDoc = {
             titulo: nombreEmpresa,
             descripcion: descripcion || '',
             logos,
             entregables,
             fechaCreacion: new Date()
         };
-        const result = await sitiosCol.insertOne(sitioDoc);
-        sitioDoc.id = result.insertedId.toString();
+        const result = await (empresasCol || db.collection('empresas')).insertOne(empresaDoc);
+        empresaDoc.id = result.insertedId.toString();
 
-        // Emitir evento y responder
-        io.emit('sitioAgregado', { id: sitioDoc.id, titulo: nombreEmpresa, descripcion: sitioDoc.descripcion });
-        res.json({ mensaje: 'Empresa/sitio creada', sitio: sitioDoc });
+        // Emitir evento específico de empresa y responder
+        io.emit('empresaAgregada', { id: empresaDoc.id, titulo: nombreEmpresa, descripcion: empresaDoc.descripcion });
+        res.json({ mensaje: 'Empresa creada', empresa: empresaDoc });
     } catch (err) {
+        console.error('Error en /api/sitio/empresa:', err);
+        res.status(500).json({ error: 'Error al crear empresa/sitio' });
+    }
+});
         console.error('Error en /api/sitio/empresa:', err);
         res.status(500).json({ error: 'Error al crear empresa/sitio' });
     }
