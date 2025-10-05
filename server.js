@@ -8,6 +8,7 @@ const { MongoClient, ObjectId, GridFSBucket } = require('mongodb');
 const stream = require('stream');
 const axios = require('axios'); // Agrega axios para llamadas HTTP
 const webpush = require('web-push');
+const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
@@ -192,7 +193,7 @@ app.use(async (req, res, next) => {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, empresasCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
 
 const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
 const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- Reemplaza por una clave privada VAPID válida
@@ -244,7 +245,6 @@ MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true
          sitiosCol = db.collection('sitios');
          adminTicketsCol = db.collection('adminTickets');
          gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
-         empresasCol = db.collection('empresas'); // Inicializa la colección de empresas
          console.log('Conectado a MongoDB y GridFS');
          scheduleIdleClose();
 
@@ -707,6 +707,8 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Servir archivos estáticos desde /public
+app.use(express.static(path.join(__dirname, 'public')));
 
 // Guardar curso y pasos en MongoDB y guardar imágenes/videos en GridFS
 app.post('/api/curso', upload.fields([
@@ -1856,94 +1858,62 @@ app.get('/api/inventarios/todo', async (req, res) => {
     }
 });
 
-// --- NUEVO: Endpoints para empresas (logo y formatos de entregables) ---
-
-const empresaUpload = multer({ storage: multer.memoryStorage() });
-
-// Subir información de empresa (nombre, logo, formatos)
-app.post('/api/empresa', empresaUpload.fields([
+// --- Nuevo endpoint: crear sitio/empresa con logo y fotos de entregables ---
+app.post('/api/sitio/empresa', upload.fields([
     { name: 'logo', maxCount: 1 },
-    { name: 'formatos' }
+    { name: 'entregables' }
 ]), async (req, res) => {
     try {
-        const { nombre, descripcion } = req.body;
-        if (!nombre) return res.status(400).json({ error: 'Nombre requerido' });
+        const { nombreEmpresa, descripcion } = req.body;
+        if (!nombreEmpresa) return res.status(400).json({ error: 'nombreEmpresa requerido' });
 
-        let logoNombre = null;
-        if (req.files && req.files['logo'] && req.files['logo'][0]) {
-            const file = req.files['logo'][0];
+        // Procesar archivos y guardarlos en GridFS con nombres únicos
+        const logos = [];
+        const entregables = [];
+
+        const guardarArchivo = async (file) => {
+            const uniqueName = `${Date.now()}_${file.originalname}`;
             const bufferStream = new stream.PassThrough();
             bufferStream.end(file.buffer);
             await new Promise((resolve, reject) => {
-                const uploadStream = gfs.openUploadStream(file.originalname, {
+                const uploadStream = gfs.openUploadStream(uniqueName, {
                     contentType: file.mimetype
                 });
                 bufferStream.pipe(uploadStream)
                     .on('error', reject)
                     .on('finish', resolve);
             });
-            logoNombre = file.originalname;
+            return { nombre: uniqueName, url: `/api/imagen/${encodeURIComponent(uniqueName)}` };
+        };
+
+        if (req.files && req.files['logo'] && req.files['logo'][0]) {
+            const saved = await guardarArchivo(req.files['logo'][0]);
+            logos.push(saved);
         }
 
-        let formatos = [];
-        if (req.files && req.files['formatos']) {
-            for (const file of req.files['formatos']) {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(file.buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(file.originalname, {
-                        contentType: file.mimetype
-                    });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
-                formatos.push({
-                    nombre: file.originalname,
-                    url: `/api/empresa/archivo/${file.originalname}`
-                });
+        if (req.files && req.files['entregables'] && req.files['entregables'].length > 0) {
+            for (const f of req.files['entregables']) {
+                const saved = await guardarArchivo(f);
+                entregables.push(saved);
             }
         }
 
-        const empresa = {
-            nombre,
+        // Crear documento sitio con logos y entregables
+        const sitioDoc = {
+            titulo: nombreEmpresa,
             descripcion: descripcion || '',
-            logo: logoNombre ? `/api/empresa/archivo/${logoNombre}` : null,
-            formatos,
-            fecha: new Date()
+            logos,
+            entregables,
+            fechaCreacion: new Date()
         };
-        await empresasCol.insertOne(empresa);
-        res.json({ mensaje: 'Empresa registrada', empresa });
-    } catch (err) {
-        res.status(500).json({ error: 'Error al registrar empresa' });
-    }
-});
+        const result = await sitiosCol.insertOne(sitioDoc);
+        sitioDoc.id = result.insertedId.toString();
 
-// Obtener todas las empresas
-app.get('/api/empresas', async (req, res) => {
-    try {
-        const empresas = await empresasCol.find({}).toArray();
-        res.json({ empresas });
+        // Emitir evento y responder
+        io.emit('sitioAgregado', { id: sitioDoc.id, titulo: nombreEmpresa, descripcion: sitioDoc.descripcion });
+        res.json({ mensaje: 'Empresa/sitio creada', sitio: sitioDoc });
     } catch (err) {
-        res.status(500).json({ error: 'Error al obtener empresas' });
-    }
-});
-
-// Servir archivos de empresa (logo, formatos)
-app.get('/api/empresa/archivo/:nombre', async (req, res) => {
-    try {
-        const nombre = req.params.nombre;
-        const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
-        if (!files || files.length === 0) {
-            return res.sendStatus(404);
-        }
-        const file = files[0];
-        res.set('Content-Type', file.contentType || 'application/octet-stream');
-        res.set('Content-Disposition', `inline; filename="${file.filename}"`);
-        const downloadStream = gfs.openDownloadStreamByName(nombre);
-        downloadStream.on('error', () => res.sendStatus(404));
-        downloadStream.pipe(res);
-    } catch (err) {
-        res.sendStatus(500);
+        console.error('Error en /api/sitio/empresa:', err);
+        res.status(500).json({ error: 'Error al crear empresa/sitio' });
     }
 });
