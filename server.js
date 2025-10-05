@@ -192,7 +192,7 @@ app.use(async (req, res, next) => {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, empresasCol;
 
 const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
 const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- Reemplaza por una clave privada VAPID válida
@@ -244,6 +244,7 @@ MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true
          sitiosCol = db.collection('sitios');
          adminTicketsCol = db.collection('adminTickets');
          gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
+         empresasCol = db.collection('empresas'); // Inicializa la colección de empresas
          console.log('Conectado a MongoDB y GridFS');
          scheduleIdleClose();
 
@@ -1852,5 +1853,97 @@ app.get('/api/inventarios/todo', async (req, res) => {
         res.json({ inventarios });
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener todos los inventarios' });
+    }
+});
+
+// --- NUEVO: Endpoints para empresas (logo y formatos de entregables) ---
+
+const empresaUpload = multer({ storage: multer.memoryStorage() });
+
+// Subir información de empresa (nombre, logo, formatos)
+app.post('/api/empresa', empresaUpload.fields([
+    { name: 'logo', maxCount: 1 },
+    { name: 'formatos' }
+]), async (req, res) => {
+    try {
+        const { nombre, descripcion } = req.body;
+        if (!nombre) return res.status(400).json({ error: 'Nombre requerido' });
+
+        let logoNombre = null;
+        if (req.files && req.files['logo'] && req.files['logo'][0]) {
+            const file = req.files['logo'][0];
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(file.originalname, {
+                    contentType: file.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            logoNombre = file.originalname;
+        }
+
+        let formatos = [];
+        if (req.files && req.files['formatos']) {
+            for (const file of req.files['formatos']) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                formatos.push({
+                    nombre: file.originalname,
+                    url: `/api/empresa/archivo/${file.originalname}`
+                });
+            }
+        }
+
+        const empresa = {
+            nombre,
+            descripcion: descripcion || '',
+            logo: logoNombre ? `/api/empresa/archivo/${logoNombre}` : null,
+            formatos,
+            fecha: new Date()
+        };
+        await empresasCol.insertOne(empresa);
+        res.json({ mensaje: 'Empresa registrada', empresa });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al registrar empresa' });
+    }
+});
+
+// Obtener todas las empresas
+app.get('/api/empresas', async (req, res) => {
+    try {
+        const empresas = await empresasCol.find({}).toArray();
+        res.json({ empresas });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener empresas' });
+    }
+});
+
+// Servir archivos de empresa (logo, formatos)
+app.get('/api/empresa/archivo/:nombre', async (req, res) => {
+    try {
+        const nombre = req.params.nombre;
+        const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
+        if (!files || files.length === 0) {
+            return res.sendStatus(404);
+        }
+        const file = files[0];
+        res.set('Content-Type', file.contentType || 'application/octet-stream');
+        res.set('Content-Disposition', `inline; filename="${file.filename}"`);
+        const downloadStream = gfs.openDownloadStreamByName(nombre);
+        downloadStream.on('error', () => res.sendStatus(404));
+        downloadStream.pipe(res);
+    } catch (err) {
+        res.sendStatus(500);
     }
 });
