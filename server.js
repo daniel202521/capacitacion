@@ -143,8 +143,6 @@ async function ensureConnected() {
         inventariosCol = db.collection('inventarios');
         sitiosCol = db.collection('sitios');
         adminTicketsCol = db.collection('adminTickets');
-        // NUEVO: colección empresas
-        empresasCol = db.collection('empresas');
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('MongoDB conectado bajo demanda');
         scheduleIdleClose();
@@ -194,8 +192,7 @@ app.use(async (req, res, next) => {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-// Añadido empresasCol e inventariosCol a las variables globales
-let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, inventariosCol, empresasCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
 
 const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
 const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- Reemplaza por una clave privada VAPID válida
@@ -246,8 +243,6 @@ MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true
          inventariosCol = db.collection('inventarios');
          sitiosCol = db.collection('sitios');
          adminTicketsCol = db.collection('adminTickets');
-         // NUEVO: colección empresas
-         empresasCol = db.collection('empresas');
          gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
          console.log('Conectado a MongoDB y GridFS');
          scheduleIdleClose();
@@ -1767,64 +1762,95 @@ app.put('/api/sitio/:id/equipo/:idx', async (req, res) => {
     }
 });
 
-// -------------------- NUEVOS ENDPOINTS PARA empresas.js --------------------
-// Obtener lista de empresas (id, nombre, logoUrl)
-app.get('/api/empresas', async (req, res) => {
+// ENDPOINTS PARA TICKETS ADMINISTRATIVOS (guardar en BD y notificar por Socket.IO)
+
+// Obtener todos los tickets administrativos
+app.get('/api/admin/tickets', async (req, res) => {
     try {
-        await ensureConnected();
-        const rows = await empresasCol.find({}).toArray();
-        const out = rows.map(r => ({
-            id: r._id.toString(),
-            nombre: r.nombre || '',
-            // Si existe logoFilename o logoUrl guardada, preferir logoUrl; sino null
-            logoUrl: r.logoUrl ? r.logoUrl : (r.logoFilename ? `/api/imagen/${encodeURIComponent(r.logoFilename)}` : null)
-        }));
-        res.json(out);
+        const tickets = await adminTicketsCol.find({}).sort({ fecha: -1 }).toArray();
+        tickets.forEach(t => t.id = t._id.toString());
+        res.json(tickets);
     } catch (err) {
-        console.error('Error en /api/empresas:', err);
-        res.status(500).json({ error: 'Error al obtener empresas' });
+        res.status(500).json({ error: 'Error al leer tickets administrativos' });
     }
 });
 
-// Crear empresa con logo opcional (campo 'logo')
-const multerEmpresa = multer({ storage: multer.memoryStorage() });
-app.post('/api/empresa', multerEmpresa.single('logo'), async (req, res) => {
+// Crear ticket administrativo
+app.post('/api/admin/ticket', async (req, res) => {
     try {
-        await ensureConnected();
-        const nombre = req.body.nombre;
-        if (!nombre) return res.status(400).json({ error: 'Nombre requerido' });
+        const { folio, actividad, responsable } = req.body;
+        if (!folio || !actividad || !responsable) return res.status(400).json({ error: 'Faltan datos' });
+        const ticket = { folio, actividad, responsable, fecha: new Date() };
+        const result = await adminTicketsCol.insertOne(ticket);
+       
+        ticket.id = result.insertedId.toString();
+        io.emit('adminTicketAgregado', ticket);
+        res.json({ mensaje: 'Ticket creado', ticket });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al crear ticket administrativo' });
+    }
+});
 
-        let logoFilename = null;
-        let logoUrl = null;
+// Eliminar ticket administrativo por id
+app.delete('/api/admin/ticket/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const result = await adminTicketsCol.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 1) {
+            io.emit('adminTicketEliminado', { id });
+            res.json({ mensaje: 'Ticket eliminado', id });
+        } else {
+            res.status(404).json({ error: 'Ticket no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar ticket' });
+    }
+});
 
-        if (req.file && req.file.buffer) {
-            // generar nombre único para evitar colisiones
-            const safeName = `${Date.now()}_${(req.file.originalname || 'logo').replace(/\s+/g, '_')}`;
-            const bufferStream = new stream.PassThrough();
-            bufferStream.end(req.file.buffer);
-            await new Promise((resolve, reject) => {
-                const uploadStream = gfs.openUploadStream(safeName, {
-                    contentType: req.file.mimetype || 'application/octet-stream'
-                });
-                bufferStream.pipe(uploadStream)
-                    .on('error', reject)
-                    .on('finish', resolve);
-            });
-            logoFilename = safeName;
-            logoUrl = `/api/imagen/${encodeURIComponent(logoFilename)}`;
+// Eliminar movimiento de inventario por índice
+app.post('/api/inventario/movimiento/eliminar', async (req, res) => {
+    try {
+        let { usuario, proyectoIdx, movIdx } = req.body;
+        if (!usuario) return res.status(400).json({ error: 'Faltan datos' });
+        proyectoIdx = parseInt(proyectoIdx, 10);
+        movIdx = parseInt(movIdx, 10);
+        if (isNaN(proyectoIdx) || isNaN(movIdx)) return res.status(400).json({ error: 'Índices inválidos' });
+
+        const doc = await inventariosCol.findOne({ usuario });
+        if (!doc) return res.status(404).json({ error: 'Inventario de usuario no encontrado' });
+
+        const proyecto = Array.isArray(doc.proyectos) ? doc.proyectos[proyectoIdx] : null;
+        if (!proyecto) return res.status(404).json({ error: 'Proyecto no encontrado' });
+
+        if (!Array.isArray(proyecto.movimientos) || movIdx < 0 || movIdx >= proyecto.movimientos.length) {
+            return res.status(404).json({ error: 'Movimiento no encontrado' });
         }
 
-        const doc = { nombre, logoFilename, logoUrl, fecha: new Date() };
-        const result = await empresasCol.insertOne(doc);
-        const inserted = {
-            id: result.insertedId.toString(),
-            nombre,
-            logoUrl: logoUrl
-        };
-        res.json(inserted);
+        // Usar $unset y luego $pull para limpiar nulls
+        const unsetField = `proyectos.${proyectoIdx}.movimientos.${movIdx}`;
+        await inventariosCol.updateOne(
+            { usuario },
+            { $unset: { [unsetField]: 1 } }
+        );
+        await inventariosCol.updateOne(
+            { usuario },
+            { $pull: { [`proyectos.${proyectoIdx}.movimientos`]: null } }
+        );
+        res.json({ mensaje: 'Movimiento eliminado' });
     } catch (err) {
-        console.error('Error en /api/empresa:', err);
-        res.status(500).json({ error: 'Error al crear empresa' });
+        // Log detallado para ver error real en Render
+        console.error(`[${new Date().toISOString()}] Error eliminando movimiento:`, err && err.stack ? err.stack : err);
+        // Responder con detalle mínimo para debugging en Render
+        res.status(500).json({ error: 'Error al eliminar movimiento', detail: err && err.message ? err.message : String(err) });
     }
 });
-// -
+
+// Endpoint para obtener todos los inventarios completos (proyectos, productos, movimientos, usuarios)
+app.get('/api/inventarios/todo', async (req, res) => {
+    try {
+        const inventarios = await db.collection('inventarios').find({}).toArray();
+        res.json({ inventarios });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener todos los inventarios' });
+    }
+});
