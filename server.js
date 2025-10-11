@@ -1300,6 +1300,30 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             }
         }
 
+        // PARSEAR equipos enviados por el formulario (si vienen)
+        let equiposParsed = [];
+        if (req.body.equipos) {
+            try {
+                if (typeof req.body.equipos === 'string') {
+                    equiposParsed = JSON.parse(req.body.equipos);
+                } else if (Array.isArray(req.body.equipos)) {
+                    equiposParsed = req.body.equipos;
+                }
+                // Normalizar: asegurar objetos y campos string
+                equiposParsed = (equiposParsed || []).filter(Boolean).map(e => ({
+                    nombre: e.nombre || '',
+                    puerto: e.puerto || '',
+                    tipoPuerto: e.tipoPuerto || e.tipo || '',
+                    ip: e.ip || '',
+                    usuario: e.usuario || '',
+                    password: e.password || ''
+                }));
+            } catch (err) {
+                // si JSON inválido, ignorar pero no bloquear
+                equiposParsed = [];
+            }
+        }
+
         // Construir ticket
         const ticket = {
             folio,
@@ -1316,6 +1340,11 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             // NUEVO: responsable (puede venir desde admin)
             responsable: responsable || ''
         };
+
+        // Añadir equipos dentro del ticket para histórico si vienen
+        if (equiposParsed.length > 0) {
+            ticket.equipos = equiposParsed;
+        }
 
         // NUEVO: guardar empresa seleccionada si viene
         if (empresaId) {
@@ -1335,178 +1364,164 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             { $push: { tickets: ticket } }
         );
         if (result.matchedCount === 1) {
+            // SI VINIERON EQUIPOS: añadirlos también al array de equipos del sitio evitando duplicados
+            let equiposAgregados = 0;
+            if (equiposParsed.length > 0) {
+                const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+                const existentes = Array.isArray(sitio && sitio.equipos) ? sitio.equipos : [];
+                // Filtrar aquellos que no existan ya (comparación por nombre+puerto+ip)
+                const toAdd = equiposParsed.filter(e => {
+                    return !existentes.some(ex =>
+                        (String(ex.nombre || '').trim() === String(e.nombre || '').trim()) &&
+                        (String(ex.puerto || '').trim() === String(e.puerto || '').trim()) &&
+                        (String(ex.ip || '').trim() === String(e.ip || '').trim())
+                    );
+                });
+                if (toAdd.length > 0) {
+                    await sitiosCol.updateOne(
+                        { _id: new ObjectId(id) },
+                        { $push: { equipos: { $each: toAdd } } }
+                    );
+                    equiposAgregados = toAdd.length;
+                }
+            }
+
             io.emit('ticketAgregado', { sitioId: id, ticket });
-            res.json({ mensaje: 'Ticket guardado', ticket });
+            return res.json({ mensaje: 'Ticket guardado', ticket, equiposAgregados });
         } else {
-            res.status(404).json({ error: 'Sitio no encontrado' });
+            return res.status(404).json({ error: 'Sitio no encontrado' });
         }
     } catch (err) {
         res.status(500).json({ error: 'Error al guardar ticket' });
     }
 });
 
-// Obtener evidencias fotográficas previas de un sitio (devuelve todas las evidencias de todos los tickets)
-app.get('/api/sitio/:id/evidencias', async (req, res) => {
+// Endpoint para obtener un ticket por ID (incluye evidencias y visitas)
+app.get('/api/sitio/:id/ticket/:ticketId', async (req, res) => {
     try {
-        const id = req.params.id;
+        const { id, ticketId } = req.params;
         const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
         if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
-        let evidencias = [];
-        if (Array.isArray(sitio.tickets)) {
-            sitio.tickets.forEach(ticket => {
-                if (Array.isArray(ticket.evidencias)) {
-                    evidencias = evidencias.concat(ticket.evidencias);
-                }
-            });
-        }
-        res.json({ evidencias });
+        // Buscar el ticket por ID dentro del sitio
+        const ticket = sitio.tickets ? sitio.tickets.find(t => t.folio === ticketId) : null;
+        if (!ticket) return res.status(404).json({ error: 'Ticket no encontrado' });
+        // Asegura que evidencias y visitas sean arrays
+        if (!Array.isArray(ticket.evidencias)) ticket.evidencias = [];
+        if (!Array.isArray(ticket.visitas)) ticket.visitas = [];
+        res.json({ ticket });
     } catch (err) {
-        res.status(500).json({ error: 'Error al obtener evidencias' });
+        res.status(500).json({ error: 'Error al obtener ticket' });
     }
 });
 
-// Opcional: obtener todos los tickets de un sitio
-app.get('/api/sitio/:id/tickets', async (req, res) => {
+// Endpoint para editar un ticket (actualiza todo el ticket)
+app.put('/api/sitio/:id/ticket/:ticketId', async (req, res) => {
     try {
-        const id = req.params.id;
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
-        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
-        res.json({ tickets: sitio.tickets || [] });
-    } catch (err) {
-        res.status(500).json({ error: 'Error al obtener tickets' });
-    }
-});
+        const { id, ticketId } = req.params;
+        const { estado, descripcion, motivoNoTerminado, evidenciaEscrita, equipos } = req.body;
+        const update = {};
+        if (estado) update['tickets.$.estado'] = estado;
+        if (descripcion) update['tickets.$.descripcion'] = descripcion;
+        if (motivoNoTerminado) update['tickets.$.motivoNoTerminado'] = motivoNoTerminado;
+        if (evidenciaEscrita) update['tickets.$.evidenciaEscrita'] = evidenciaEscrita;
 
-// Eliminar sitio por ID
-app.delete('/api/sitio/:id', async (req, res) => {
-    try {
-        const id = req.params.id;
-        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
-        if (result.deletedCount === 1) {
-            io.emit('sitioEliminado', { id });
-            res.json({ mensaje: 'Sitio eliminado' });
-        } else {
-            res.status(404).json({ error: 'Sitio no encontrado' });
-        }
-    } catch (err) {
-        res.status(500).json({ error: 'Error al eliminar el sitio' });
-    }
-});
-
-// Actualizar estado de un ticket (reabrir o terminar)
-app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
-    try {
-        const id = req.params.id;
-        const ticketIdx = parseInt(req.params.ticketIdx, 10);
-        const { estado, motivoNoTerminado, evidenciaEscrita } = req.body;
-        if (!estado || isNaN(ticketIdx)) return res.status(400).json({ error: 'Faltan datos' });
-
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
-        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
-            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
-        }
-
-        // Actualiza el estado y motivo si corresponde
-        const updateFields = {
-            [`tickets.${ticketIdx}.estado`]: estado
-        };
-        if (estado === 'en_curso') {
-            updateFields[`tickets.${ticketIdx}.motivoNoTerminado`] = motivoNoTerminado || '';
-            updateFields[`tickets.${ticketIdx}.evidenciaEscrita`] = evidenciaEscrita || '';
-        } else {
-            updateFields[`tickets.${ticketIdx}.motivoNoTerminado`] = '';
-            updateFields[`tickets.${ticketIdx}.evidenciaEscrita`] = '';
-        }
-
-        await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
-            { $set: updateFields }
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id), 'tickets.folio': ticketId },
+            { $set: update }
         );
-        res.json({ mensaje: 'Ticket actualizado' });
-    } catch (err) {
-        res.status(500).json({ error: 'Error al actualizar el ticket' });
-    }
-});
-
-// Registrar nueva visita en un ticket
-app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
-    try {
-        const id = req.params.id;
-        const ticketIdx = parseInt(req.params.ticketIdx, 10);
-        const { comentario, evidenciaEscrita } = req.body;
-        if (isNaN(ticketIdx)) return res.status(400).json({ error: 'Ticket inválido' });
-
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
-        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
-            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
-        }
-
-        const visita = {
-            fecha: new Date(),
-            comentario: comentario || '',
-            evidenciaEscrita: evidenciaEscrita || ''
-        };
-
-        await sitiosCol.updateOne(
-            { _id: new ObjectId(id) },
-            { $push: { [`tickets.${ticketIdx}.visitas`]: visita } }
-        );
-        res.json({ mensaje: 'Visita registrada', visita });
-    } catch (err) {
-        res.status(500).json({ error: 'Error al registrar visita' });
-    }
-});
-
-// Marcar ticket como terminado y guardar evidencia escrita/fotográfica en la visita final
-app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), async (req, res) => {
-    try {
-        const id = req.params.id;
-        const ticketIdx = parseInt(req.params.ticketIdx, 10);
-        const { evidenciaEscrita, estado } = req.body;
-        if (isNaN(ticketIdx) || estado !== 'terminado') return res.status(400).json({ error: 'Datos inválidos' });
-
-        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
-        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
-            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
-        }
-
-        // Procesar imágenes
-        let evidencias = [];
-        if (req.files && req.files.length > 0) {
-            for (const file of req.files) {
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(file.buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(file.originalname, {
-                        contentType: file.mimetype
-                    });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
-                evidencias.push({
-                    nombre: file.originalname,
-                    url: `/api/imagen/${file.originalname}`
-                });
+        if (result.matchedCount === 1) {
+            // Si se enviaron equipos, actualizar también el array de equipos del sitio
+            if (equipos && Array.isArray(equipos)) {
+                await sitiosCol.updateOne(
+                    { _id: new ObjectId(id) },
+                    { $push: { equipos: { $each: equipos } } }
+                );
             }
+            res.json({ mensaje: 'Ticket actualizado' });
+        } else {
+            res.status(404).json({ error: 'Ticket no encontrado' });
         }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al actualizar ticket' });
+    }
+});
 
-        // Actualiza el ticket
-        const updateFields = {
-            [`tickets.${ticketIdx}.estado`]: 'terminado',
-            [`tickets.${ticketIdx}.evidenciaEscrita`]: evidenciaEscrita || '',
-        };
-        if (evidencias.length > 0) {
-            updateFields[`tickets.${ticketIdx}.evidenciasFinal`] = evidencias;
+// Endpoint para eliminar un ticket por ID
+app.delete('/api/sitio/:id/ticket/:ticketId', async (req, res) => {
+    try {
+        const { id, ticketId } = req.params;
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $pull: { tickets: { folio: ticketId } } }
+        );
+        if (result.modifiedCount === 1) {
+            res.json({ mensaje: 'Ticket eliminado' });
+        } else {
+            res.status(404).json({ error: 'Ticket no encontrado' });
         }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar ticket' });
+    }
+});
 
+// Endpoint para eliminar una visita de un ticket
+app.delete('/api/sitio/:id/ticket/:ticketId/visita/:visitaIdx', async (req, res) => {
+    try {
+        const { id, ticketId, visitaIdx } = req.params;
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id), 'tickets.folio': ticketId },
+            { $unset: { [`tickets.$.visitas.${visitaIdx}`]: "" } }
+        );
+        if (result.modifiedCount === 1) {
+            res.json({ mensaje: 'Visita eliminada' });
+        } else {
+            res.status(404).json({ error: 'Visita no encontrada' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar visita' });
+    }
+});
+
+// Endpoint para editar una visita de un ticket
+app.put('/api/sitio/:id/ticket/:ticketId/visita/:visitaIdx', async (req, res) => {
+    try {
+        const { id, ticketId, visitaIdx } = req.params;
+        const { comentario, evidenciaEscrita } = req.body;
+        const update = {};
+        if (comentario !== undefined) update[`tickets.$.visitas.${visitaIdx}.comentario`] = comentario;
+        if (evidenciaEscrita !== undefined) update[`tickets.$.visitas.${visitaIdx}.evidenciaEscrita`] = evidenciaEscrita;
+
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id), 'tickets.folio': ticketId },
+            { $set: update }
+        );
+        if (result.modifiedCount === 1) {
+            res.json({ mensaje: 'Visita actualizada' });
+        } else {
+            res.status(404).json({ error: 'Visita no encontrada' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al actualizar visita' });
+    }
+});
+
+// Endpoint para entregar un sitio (marcar como entregado)
+app.post('/api/sitio/:id/entregar', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        // Elimina la verificación para permitir entregar varias veces
+        // if (sitio.entregado) {
+        //     return res.status(400).json({ error: 'El sitio ya fue entregado' });
+        // }
         await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
-            { $set: updateFields }
+            { $set: { entregado: true, fechaEntrega: new Date() } }
         );
-        res.json({ mensaje: 'Ticket marcado como terminado', evidencias });
+        res.json({ mensaje: 'Sitio entregado correctamente' });
     } catch (err) {
-        res.status(500).json({ error: 'Error al terminar el ticket' });
+        res.status(500).json({ error: 'Error al entregar el sitio' });
     }
 });
 
@@ -1754,11 +1769,6 @@ app.post('/api/sitio/:id/entregar', async (req, res) => {
     } catch (err) {
         res.status(500).json({ error: 'Error al entregar el sitio' });
     }
-});
-
-// Endpoint de salud para Render
-app.get('/health', (req, res) => {
-    res.status(200).send('OK');
 });
 
 // Editar un solo equipo de un sitio por índice
