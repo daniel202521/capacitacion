@@ -142,6 +142,8 @@ async function ensureConnected() {
         // Asegura que inventariosCol también esté disponible cuando conectemos bajo demanda
         inventariosCol = db.collection('inventarios');
         sitiosCol = db.collection('sitios');
+        // Colección de empresas (logos almacenados en GridFS)
+        empresasCol = db.collection('empresas');
         adminTicketsCol = db.collection('adminTickets');
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('MongoDB conectado bajo demanda');
@@ -192,7 +194,7 @@ app.use(async (req, res, next) => {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, inventariosCol, empresasCol;
 
 const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
 const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- Reemplaza por una clave privada VAPID válida
@@ -242,6 +244,8 @@ MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true
          // Crear inventariosCol global igual que en ensureConnected
          inventariosCol = db.collection('inventarios');
          sitiosCol = db.collection('sitios');
+         // Colección para empresas (logos en GridFS)
+         empresasCol = db.collection('empresas');
          adminTicketsCol = db.collection('adminTickets');
          gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
          console.log('Conectado a MongoDB y GridFS');
@@ -844,6 +848,55 @@ app.get('/api/cursos', async (req, res) => {
         res.json(cursos);
     } catch (err) {
         res.status(500).json({ error: 'Error al leer los cursos' });
+    }
+});
+
+// --- ENDPOINTS PARA EMPRESAS (lista y creación con logo en GridFS) ---
+const multerEmpresa = multer({ storage: multer.memoryStorage() });
+
+// Crear empresa (campo 'nombre' y archivo 'logo')
+app.post('/api/empresa', multerEmpresa.single('logo'), async (req, res) => {
+    try {
+        const { nombre } = req.body;
+        if (!nombre) return res.status(400).json({ error: 'Faltan datos' });
+        let logoNombre = null;
+        if (req.file) {
+            const file = req.file;
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(file.originalname, {
+                    contentType: file.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            logoNombre = file.originalname;
+        }
+        const result = await empresasCol.insertOne({ nombre, logo: logoNombre });
+        const empresa = { id: result.insertedId.toString(), nombre, url: logoNombre ? `/api/imagen/${logoNombre}` : null };
+        io.emit('empresaCreada', empresa);
+        res.json({ mensaje: 'Empresa creada', empresa });
+    } catch (err) {
+        console.error('Error en /api/empresa:', err);
+        res.status(500).json({ error: 'Error al crear empresa' });
+    }
+});
+
+// Listar empresas
+app.get('/api/empresas', async (req, res) => {
+    try {
+        const rows = await empresasCol.find({}).toArray();
+        const empresas = rows.map(e => ({
+            id: e._id.toString(),
+            nombre: e.nombre,
+            url: e.logo ? `/api/imagen/${e.logo}` : null
+        }));
+        res.json(empresas);
+    } catch (err) {
+        console.error('Error en /api/empresas:', err);
+        res.status(500).json({ error: 'Error al leer las empresas' });
     }
 });
 
