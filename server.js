@@ -142,9 +142,9 @@ async function ensureConnected() {
         // Asegura que inventariosCol también esté disponible cuando conectemos bajo demanda
         inventariosCol = db.collection('inventarios');
         sitiosCol = db.collection('sitios');
-        // Colección de empresas (logos almacenados en GridFS)
-        empresasCol = db.collection('empresas');
         adminTicketsCol = db.collection('adminTickets');
+        // Colección para empresas
+        empresasCol = db.collection('empresas');
         gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
         console.log('MongoDB conectado bajo demanda');
         scheduleIdleClose();
@@ -194,7 +194,7 @@ app.use(async (req, res, next) => {
 // --- MongoDB config ---
 const MONGO_URL = 'mongodb+srv://daniel:daniel25@capacitacion.nxd7yl9.mongodb.net/?retryWrites=true&w=majority&appName=capacitacion&authSource=admin';
 const DB_NAME = 'capacitacion';
-let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, inventariosCol, empresasCol;
+let db, cursosCol, usuariosCol, sitiosCol, gfs, adminTicketsCol, empresasCol, inventariosCol;
 
 const VAPID_PUBLIC_KEY = 'BE3OGd8E0TxFDNvAL85myO8GEFwkOhqOrkfqiJbXXveQQkpNF3_HwmWrd5SemRV9SN9EXXe1ZPFET0hnDcw2-Uc';
 const VAPID_PRIVATE_KEY = '8PxGNwSHAy-_Fb55XlpY5NGN3N2VeNXfxXJuTcw93s'; // <-- Reemplaza por una clave privada VAPID válida
@@ -244,9 +244,9 @@ MongoClient.connect(MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true
          // Crear inventariosCol global igual que en ensureConnected
          inventariosCol = db.collection('inventarios');
          sitiosCol = db.collection('sitios');
-         // Colección para empresas (logos en GridFS)
-         empresasCol = db.collection('empresas');
          adminTicketsCol = db.collection('adminTickets');
+         // Crear colección empresas
+         empresasCol = db.collection('empresas');
          gfs = new GridFSBucket(db, { bucketName: 'imagenes' });
          console.log('Conectado a MongoDB y GridFS');
          scheduleIdleClose();
@@ -848,55 +848,6 @@ app.get('/api/cursos', async (req, res) => {
         res.json(cursos);
     } catch (err) {
         res.status(500).json({ error: 'Error al leer los cursos' });
-    }
-});
-
-// --- ENDPOINTS PARA EMPRESAS (lista y creación con logo en GridFS) ---
-const multerEmpresa = multer({ storage: multer.memoryStorage() });
-
-// Crear empresa (campo 'nombre' y archivo 'logo')
-app.post('/api/empresa', multerEmpresa.single('logo'), async (req, res) => {
-    try {
-        const { nombre } = req.body;
-        if (!nombre) return res.status(400).json({ error: 'Faltan datos' });
-        let logoNombre = null;
-        if (req.file) {
-            const file = req.file;
-            const bufferStream = new stream.PassThrough();
-            bufferStream.end(file.buffer);
-            await new Promise((resolve, reject) => {
-                const uploadStream = gfs.openUploadStream(file.originalname, {
-                    contentType: file.mimetype
-                });
-                bufferStream.pipe(uploadStream)
-                    .on('error', reject)
-                    .on('finish', resolve);
-            });
-            logoNombre = file.originalname;
-        }
-        const result = await empresasCol.insertOne({ nombre, logo: logoNombre });
-        const empresa = { id: result.insertedId.toString(), nombre, url: logoNombre ? `/api/imagen/${logoNombre}` : null };
-        io.emit('empresaCreada', empresa);
-        res.json({ mensaje: 'Empresa creada', empresa });
-    } catch (err) {
-        console.error('Error en /api/empresa:', err);
-        res.status(500).json({ error: 'Error al crear empresa' });
-    }
-});
-
-// Listar empresas
-app.get('/api/empresas', async (req, res) => {
-    try {
-        const rows = await empresasCol.find({}).toArray();
-        const empresas = rows.map(e => ({
-            id: e._id.toString(),
-            nombre: e.nombre,
-            url: e.logo ? `/api/imagen/${e.logo}` : null
-        }));
-        res.json(empresas);
-    } catch (err) {
-        console.error('Error en /api/empresas:', err);
-        res.status(500).json({ error: 'Error al leer las empresas' });
     }
 });
 
@@ -1698,6 +1649,7 @@ app.post('/api/sitio/:id/marcar-trabajo', async (req, res) => {
             res.json({ mensaje: 'Sitio marcado como sitio de trabajo' });
         } else {
             res.status(404).json({ error: 'Sitio no encontrado' });
+       
         }
     } catch (err) {
         res.status(500).json({ error: 'Error al marcar sitio de trabajo' });
@@ -1905,5 +1857,118 @@ app.get('/api/inventarios/todo', async (req, res) => {
         res.json({ inventarios });
     } catch (err) {
         res.status(500).json({ error: 'Error al obtener todos los inventarios' });
+    }
+});
+
+// --- NUEVOS ENDPOINTS: Empresas (list, create, edit, delete) ---
+app.get('/api/empresas', async (req, res) => {
+    try {
+        await ensureConnected();
+        const docs = await empresasCol.find({}).toArray();
+        // Normalizar id y url para frontend
+        const out = docs.map(d => ({
+            id: d._id.toString(),
+            nombre: d.nombre,
+            // Si guardamos la url completa, úsala; si guardamos filename, construir ruta
+            url: d.url || (d.logo ? `/api/imagen/${d.logo}` : undefined),
+            logo: d.logo
+        }));
+        res.json(out);
+    } catch (err) {
+        console.error('Error GET /api/empresas:', err);
+        res.status(500).json({ error: 'Error al listar empresas' });
+    }
+});
+
+// Crear empresa (nombre + logo opcional)
+app.post('/api/empresa', upload.single('logo'), async (req, res) => {
+    try {
+        await ensureConnected();
+        const nombre = req.body.nombre || '';
+        let logoFilename = null;
+        if (req.file) {
+            const original = req.file.originalname || 'logo';
+            const filename = `${Date.now()}_${original.replace(/\s+/g, '_')}`;
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(req.file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(filename, { contentType: req.file.mimetype });
+                bufferStream.pipe(uploadStream).on('error', reject).on('finish', resolve);
+            });
+            logoFilename = filename;
+        }
+        const doc = { nombre, logo: logoFilename };
+        const result = await empresasCol.insertOne(doc);
+        res.json({ mensaje: 'Empresa creada', id: result.insertedId.toString() });
+    } catch (err) {
+        console.error('Error POST /api/empresa:', err);
+        res.status(500).json({ error: 'Error creando empresa' });
+    }
+});
+
+// Editar empresa (nombre y/o logo)
+app.put('/api/empresa/:id', upload.single('logo'), async (req, res) => {
+    try {
+        await ensureConnected();
+        const id = req.params.id;
+        const nombre = req.body.nombre;
+        const update = {};
+        if (typeof nombre === 'string') update.nombre = nombre;
+        if (req.file) {
+            // subir nuevo logo
+            const original = req.file.originalname || 'logo';
+            const filename = `${Date.now()}_${original.replace(/\s+/g, '_')}`;
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(req.file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(filename, { contentType: req.file.mimetype });
+                bufferStream.pipe(uploadStream).on('error', reject).on('finish', resolve);
+            });
+            // obtener documento previo para eliminar logo antiguo si existe
+            const prev = await empresasCol.findOne({ _id: new ObjectId(id) });
+            if (prev && prev.logo) {
+                try {
+                    const files = await db.collection('imagenes.files').find({ filename: prev.logo }).toArray();
+                    for (const f of files) {
+                        try { await gfs.delete(f._id); } catch (e) { /* ignore */ }
+                    }
+                } catch (e) { /* ignore */ }
+            }
+            update.logo = filename;
+        }
+        const result = await empresasCol.updateOne({ _id: new ObjectId(id) }, { $set: update });
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Empresa actualizada' });
+        } else {
+            res.status(404).json({ error: 'Empresa no encontrada' });
+        }
+    } catch (err) {
+        console.error('Error PUT /api/empresa/:id:', err);
+        res.status(500).json({ error: 'Error actualizando empresa' });
+    }
+});
+
+// Eliminar empresa y archivo en GridFS si existe
+app.delete('/api/empresa/:id', async (req, res) => {
+    try {
+        await ensureConnected();
+        const id = req.params.id;
+        const doc = await empresasCol.findOne({ _id: new ObjectId(id) });
+        if (!doc) return res.status(404).json({ error: 'Empresa no encontrada' });
+        // eliminar documento
+        const result = await empresasCol.deleteOne({ _id: new ObjectId(id) });
+        // eliminar archivos gridfs asociados
+        if (doc.logo) {
+            try {
+                const files = await db.collection('imagenes.files').find({ filename: doc.logo }).toArray();
+                for (const f of files) {
+                    try { await gfs.delete(f._id); } catch (e) { /* ignore */ }
+                }
+            } catch (e) { /* ignore */ }
+        }
+        res.json({ mensaje: 'Empresa eliminada' });
+    } catch (err) {
+        console.error('Error DELETE /api/empresa/:id:', err);
+        res.status(500).json({ error: 'Error eliminando empresa' });
     }
 });
