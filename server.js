@@ -1267,7 +1267,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
     try {
         const id = req.params.id;
         // Agrega los campos del instalador
-        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma, nombreInstalador, firmaInstalador, responsable } = req.body;
+        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma, nombreInstalador, firmaInstalador, responsable, empresaId } = req.body;
         if (!tipo || !descripcion || !estado) return res.status(400).json({ error: 'Faltan datos' });
 
         // Procesar archivos
@@ -1316,6 +1316,11 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             // NUEVO: responsable (puede venir desde admin)
             responsable: responsable || ''
         };
+
+        // NUEVO: guardar empresa seleccionada si viene
+        if (empresaId) {
+            ticket.empresaId = String(empresaId);
+        }
 
         // Si está en curso, agrega motivo y evidencias de no terminado
         if (estado === 'en_curso') {
