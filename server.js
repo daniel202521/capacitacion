@@ -789,14 +789,36 @@ app.options('/api/imagen/:nombre', (req, res) => {
 
 app.get('/api/imagen/:nombre', async (req, res) => {
     try {
-        const nombre = req.params.nombre;
-        const files = await db.collection('imagenes.files').find({ filename: nombre }).toArray();
+        // nombre viene decoded por express
+        const requested = req.params.nombre;
+
+        // helper para escapar regex
+        const escapeRegex = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+        // Construir variantes: exacta, decoded, con guiones bajos
+        const variants = [];
+        variants.push(requested);
+        try { variants.push(decodeURIComponent(requested)); } catch (e) { /* ignore */ }
+        variants.push(requested.replace(/\s+/g, '_'));
+        try { variants.push(decodeURIComponent(requested).replace(/\s+/g, '_')); } catch (e) { /* ignore */ }
+
+        // Buscar coincidencias exactas primero
+        let files = await db.collection('imagenes.files').find({ filename: { $in: variants } }).toArray();
+
+        // Si no hay exactas, buscar por sufijo (p. ej. archivos con timestamp_prefix_originalname.png)
+        if (!files || files.length === 0) {
+            const basename = (requested.split('/').pop() || requested);
+            const regex = new RegExp(escapeRegex(basename) + '$', 'i');
+            files = await db.collection('imagenes.files').find({ filename: { $regex: regex } }).toArray();
+        }
+
         if (!files || files.length === 0) {
             res.set('Access-Control-Allow-Origin', '*');
             res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
             res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
             return res.sendStatus(404);
         }
+
         const file = files[0];
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
@@ -814,20 +836,17 @@ app.get('/api/imagen/:nombre', async (req, res) => {
             res.status(206);
             res.set('Content-Range', `bytes ${start}-${end}/${file.length}`);
             res.set('Content-Length', chunkSize);
-            const downloadStream = gfs.openDownloadStreamByName(nombre, { start, end: end + 1 });
-            downloadStream.on('error', () => {
-                res.sendStatus(404);
-            });
+            const downloadStream = gfs.openDownloadStream(file._id, { start, end: end + 1 });
+            downloadStream.on('error', () => { res.sendStatus(404); });
             downloadStream.pipe(res);
         } else {
             res.set('Content-Length', file.length);
-            const downloadStream = gfs.openDownloadStreamByName(nombre);
-            downloadStream.on('error', () => {
-                res.sendStatus(404);
-            });
+            const downloadStream = gfs.openDownloadStream(file._id);
+            downloadStream.on('error', () => { res.sendStatus(404); });
             downloadStream.pipe(res);
         }
     } catch (err) {
+        console.error('Error GET /api/imagen/:nombre:', err);
         res.set('Access-Control-Allow-Origin', '*');
         res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
         res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range');
@@ -1865,14 +1884,29 @@ app.get('/api/empresas', async (req, res) => {
     try {
         await ensureConnected();
         const docs = await empresasCol.find({}).toArray();
-        // Normalizar id y url para frontend
-        const out = docs.map(d => ({
-            id: d._id.toString(),
-            nombre: d.nombre,
-            // Si guardamos la url completa, úsala; si guardamos filename, construir ruta
-            url: d.url || (d.logo ? `/api/imagen/${d.logo}` : undefined),
-            logo: d.logo
-        }));
+        // Construir base URL absoluta (respetando protocolo y host de la petición)
+        const baseUrl = `${req.protocol}://${req.get('host')}`;
+        const out = docs.map(d => {
+            // si el documento tiene un logo en GridFS, construir imageUrl absoluto con version
+            let imageUrl = undefined;
+            if (d.logo) {
+                const ver = d.logoVersion ? `?v=${encodeURIComponent(d.logoVersion)}` : '';
+                imageUrl = `${baseUrl}/api/imagen/${encodeURIComponent(d.logo)}${ver}`;
+            } else if (d.url && /^https?:\/\//i.test(String(d.url).trim())) {
+                imageUrl = d.url;
+            } else if (d.url && typeof d.url === 'string' && d.url.startsWith('/')) {
+                // ruta relativa en el server -> convertir a absoluta
+                imageUrl = `${baseUrl}${d.url}`;
+            }
+            return {
+                id: d._id.toString(),
+                nombre: d.nombre,
+                logo: d.logo,
+                logoVersion: d.logoVersion || null,
+                url: d.url || null,
+                imageUrl
+            };
+        });
         res.json(out);
     } catch (err) {
         console.error('Error GET /api/empresas:', err);
@@ -1886,6 +1920,7 @@ app.post('/api/empresa', upload.single('logo'), async (req, res) => {
         await ensureConnected();
         const nombre = req.body.nombre || '';
         let logoFilename = null;
+        let logoVersion = null;
         if (req.file) {
             const original = req.file.originalname || 'logo';
             const filename = `${Date.now()}_${original.replace(/\s+/g, '_')}`;
@@ -1896,8 +1931,9 @@ app.post('/api/empresa', upload.single('logo'), async (req, res) => {
                 bufferStream.pipe(uploadStream).on('error', reject).on('finish', resolve);
             });
             logoFilename = filename;
+            logoVersion = Date.now();
         }
-        const doc = { nombre, logo: logoFilename };
+        const doc = { nombre, logo: logoFilename, logoVersion };
         const result = await empresasCol.insertOne(doc);
         res.json({ mensaje: 'Empresa creada', id: result.insertedId.toString() });
     } catch (err) {
@@ -1935,6 +1971,7 @@ app.put('/api/empresa/:id', upload.single('logo'), async (req, res) => {
                 } catch (e) { /* ignore */ }
             }
             update.logo = filename;
+            update.logoVersion = Date.now();
         }
         const result = await empresasCol.updateOne({ _id: new ObjectId(id) }, { $set: update });
         if (result.matchedCount === 1) {
@@ -1955,9 +1992,7 @@ app.delete('/api/empresa/:id', async (req, res) => {
         const id = req.params.id;
         const doc = await empresasCol.findOne({ _id: new ObjectId(id) });
         if (!doc) return res.status(404).json({ error: 'Empresa no encontrada' });
-        // eliminar documento
         const result = await empresasCol.deleteOne({ _id: new ObjectId(id) });
-        // eliminar archivos gridfs asociados
         if (doc.logo) {
             try {
                 const files = await db.collection('imagenes.files').find({ filename: doc.logo }).toArray();
