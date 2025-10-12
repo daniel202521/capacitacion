@@ -1273,6 +1273,8 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
         // Procesar archivos
         let evidencias = [];
         let evidenciasNoTerminado = [];
+        let planos = []; // NUEVO: planos asociados al ticket
+
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
                 const bufferStream = new stream.PassThrough();
@@ -1285,8 +1287,14 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
                         .on('error', reject)
                         .on('finish', resolve);
                 });
-                // Clasifica por campo
-                if (file.fieldname === 'fotosNoTerminado' || file.fieldname === 'fotosNoTerminado[]') {
+                // Clasifica por fieldname
+                // NUEVO: si el campo es 'planos' o 'planos[]' lo guardamos en ticket.planos
+                if (file.fieldname === 'planos' || file.fieldname === 'planos[]') {
+                    planos.push({
+                        nombre: file.originalname,
+                        url: `/api/imagen/${file.originalname}`
+                    });
+                } else if (file.fieldname === 'fotosNoTerminado' || file.fieldname === 'fotosNoTerminado[]') {
                     evidenciasNoTerminado.push({
                         nombre: file.originalname,
                         url: `/api/imagen/${file.originalname}`
@@ -1310,12 +1318,35 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             fecha: new Date(),
             nombreRecibe: nombreRecibe || '',
             firma: firma || '',
-            // NUEVO: instalador
             nombreInstalador: nombreInstalador || '',
             firmaInstalador: firmaInstalador || '',
-            // NUEVO: responsable (puede venir desde admin)
             responsable: responsable || ''
         };
+
+        // Adjuntar planos si se subieron
+        if (planos.length > 0) {
+            ticket.planos = planos;
+        }
+
+        // NUEVO: parsear equipos enviados desde el cliente (campo ticketEquipos JSON en multipart)
+        if (req.body && req.body.ticketEquipos) {
+            try {
+                const parsed = JSON.parse(req.body.ticketEquipos);
+                if (Array.isArray(parsed) && parsed.length > 0) {
+                    // normalizar campos mínimos
+                    ticket.equipos = parsed.map(eq => ({
+                        nombre: eq.nombre || '',
+                        puerto: eq.puerto || '',
+                        ip: eq.ip || '',
+                        usuario: eq.usuario || '',
+                        password: eq.password || ''
+                    }));
+                }
+            } catch (e) {
+                // si falla parseo, ignorar (no bloquear)
+                console.warn('No se pudo parsear ticketEquipos:', e && e.message ? e.message : e);
+            }
+        }
 
         // NUEVO: guardar empresa seleccionada si viene
         if (empresaId) {
@@ -1631,6 +1662,7 @@ app.delete('/api/sitio/:id/material/:nombre', async (req, res) => {
         const nuevoMaterial = material.filter(m => m.nombre !== nombre);
         await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
+           
             { $set: { material: nuevoMaterial } }
         );
         res.json({ mensaje: 'Material eliminado' });
