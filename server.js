@@ -1273,8 +1273,6 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
         // Procesar archivos
         let evidencias = [];
         let evidenciasNoTerminado = [];
-        let planos = []; // NUEVO: planos asociados al ticket
-
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
                 const bufferStream = new stream.PassThrough();
@@ -1287,14 +1285,8 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
                         .on('error', reject)
                         .on('finish', resolve);
                 });
-                // Clasifica por fieldname
-                // NUEVO: si el campo es 'planos' o 'planos[]' lo guardamos en ticket.planos
-                if (file.fieldname === 'planos' || file.fieldname === 'planos[]') {
-                    planos.push({
-                        nombre: file.originalname,
-                        url: `/api/imagen/${file.originalname}`
-                    });
-                } else if (file.fieldname === 'fotosNoTerminado' || file.fieldname === 'fotosNoTerminado[]') {
+                // Clasifica por campo
+                if (file.fieldname === 'fotosNoTerminado' || file.fieldname === 'fotosNoTerminado[]') {
                     evidenciasNoTerminado.push({
                         nombre: file.originalname,
                         url: `/api/imagen/${file.originalname}`
@@ -1318,37 +1310,12 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             fecha: new Date(),
             nombreRecibe: nombreRecibe || '',
             firma: firma || '',
+            // NUEVO: instalador
             nombreInstalador: nombreInstalador || '',
             firmaInstalador: firmaInstalador || '',
+            // NUEVO: responsable (puede venir desde admin)
             responsable: responsable || ''
         };
-
-        // Adjuntar planos si se subieron
-        if (planos.length > 0) {
-            ticket.planos = planos;
-        }
-
-        // NUEVO: parsear equipos enviados desde el cliente (campo ticketEquipos JSON en multipart)
-        if (req.body && req.body.ticketEquipos) {
-            try {
-                const parsed = JSON.parse(req.body.ticketEquipos);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    // normalizar campos mínimos
-                    ticket.equipos = parsed.map(eq => ({
-                        nombre: eq.nombre || '',
-                        puerto: eq.puerto || '',
-                        modelo: eq.modelo || '',
-                        serie: eq.serie || '',
-                        ip: eq.ip || '',
-                        usuario: eq.usuario || '',
-                        password: eq.password || ''
-                    }));
-                }
-            } catch (e) {
-                // si falla parseo, ignorar (no bloquear)
-                console.warn('No se pudo parsear ticketEquipos:', e && e.message ? e.message : e);
-            }
-        }
 
         // NUEVO: guardar empresa seleccionada si viene
         if (empresaId) {
@@ -1367,29 +1334,6 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             { _id: new ObjectId(id) },
             { $push: { tickets: ticket } }
         );
-
-        // --- NUEVO: si el ticket trae equipos, también los agregamos al array 'equipos' del sitio ---
-        if (result.matchedCount === 1 && Array.isArray(ticket.equipos) && ticket.equipos.length > 0) {
-            // Normalizar y añadir puerto al documento del sitio
-            const equiposToAdd = ticket.equipos.map(eq => ({
-                nombre: eq.nombre || '',
-                modelo: eq.modelo || '',
-                serie: eq.serie || '',
-                puerto: eq.puerto || '',
-                ip: eq.ip || '',
-                usuario: eq.usuario || '',
-                password: eq.password || ''
-            }));
-            try {
-                await sitiosCol.updateOne(
-                    { _id: new ObjectId(id) },
-                    { $push: { equipos: { $each: equiposToAdd } } }
-                );
-            } catch (e) {
-                console.warn('No se pudieron agregar equipos al sitio (pero el ticket fue guardado):', e && e.message ? e.message : e);
-            }
-        }
-
         if (result.matchedCount === 1) {
             io.emit('ticketAgregado', { sitioId: id, ticket });
             res.json({ mensaje: 'Ticket guardado', ticket });
@@ -1401,7 +1345,455 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
     }
 });
 
-// Endpoint para obtener todos los tickets administrativos
+// Obtener evidencias fotográficas previas de un sitio (devuelve todas las evidencias de todos los tickets)
+app.get('/api/sitio/:id/evidencias', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        let evidencias = [];
+        if (Array.isArray(sitio.tickets)) {
+            sitio.tickets.forEach(ticket => {
+                if (Array.isArray(ticket.evidencias)) {
+                    evidencias = evidencias.concat(ticket.evidencias);
+                }
+            });
+        }
+        res.json({ evidencias });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener evidencias' });
+    }
+});
+
+// Opcional: obtener todos los tickets de un sitio
+app.get('/api/sitio/:id/tickets', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ tickets: sitio.tickets || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener tickets' });
+    }
+});
+
+// Eliminar sitio por ID
+app.delete('/api/sitio/:id', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 1) {
+            io.emit('sitioEliminado', { id });
+            res.json({ mensaje: 'Sitio eliminado' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar el sitio' });
+    }
+});
+
+// Actualizar estado de un ticket (reabrir o terminar)
+app.put('/api/sitio/:id/ticket/:ticketIdx', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { estado, motivoNoTerminado, evidenciaEscrita } = req.body;
+        if (!estado || isNaN(ticketIdx)) return res.status(400).json({ error: 'Faltan datos' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        // Actualiza el estado y motivo si corresponde
+        const updateFields = {
+            [`tickets.${ticketIdx}.estado`]: estado
+        };
+        if (estado === 'en_curso') {
+            updateFields[`tickets.${ticketIdx}.motivoNoTerminado`] = motivoNoTerminado || '';
+            updateFields[`tickets.${ticketIdx}.evidenciaEscrita`] = evidenciaEscrita || '';
+        } else {
+            updateFields[`tickets.${ticketIdx}.motivoNoTerminado`] = '';
+            updateFields[`tickets.${ticketIdx}.evidenciaEscrita`] = '';
+        }
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+        res.json({ mensaje: 'Ticket actualizado' });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al actualizar el ticket' });
+    }
+});
+
+// Registrar nueva visita en un ticket
+app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { comentario, evidenciaEscrita } = req.body;
+        if (isNaN(ticketIdx)) return res.status(400).json({ error: 'Ticket inválido' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        const visita = {
+            fecha: new Date(),
+            comentario: comentario || '',
+            evidenciaEscrita: evidenciaEscrita || ''
+        };
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { [`tickets.${ticketIdx}.visitas`]: visita } }
+        );
+        res.json({ mensaje: 'Visita registrada', visita });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al registrar visita' });
+    }
+});
+
+// Marcar ticket como terminado y guardar evidencia escrita/fotográfica en la visita final
+app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { evidenciaEscrita, estado } = req.body;
+        if (isNaN(ticketIdx) || estado !== 'terminado') return res.status(400).json({ error: 'Datos inválidos' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        // Procesar imágenes
+        let evidencias = [];
+        if (req.files && req.files.length > 0) {
+            for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                evidencias.push({
+                    nombre: file.originalname,
+                    url: `/api/imagen/${file.originalname}`
+                });
+            }
+        }
+
+        // Actualiza el ticket
+        const updateFields = {
+            [`tickets.${ticketIdx}.estado`]: 'terminado',
+            [`tickets.${ticketIdx}.evidenciaEscrita`]: evidenciaEscrita || '',
+        };
+        if (evidencias.length > 0) {
+            updateFields[`tickets.${ticketIdx}.evidenciasFinal`] = evidencias;
+        }
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+        res.json({ mensaje: 'Ticket marcado como terminado', evidencias });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al terminar el ticket' });
+    }
+});
+
+// Verificar sesión de usuario
+app.post('/api/verificar-sesion', async (req, res) => {
+    const { usuario } = req.body;
+    if (!usuario) return res.status(400).json({ valida: false, error: 'Usuario requerido' });
+    try {
+        const user = await usuariosCol.findOne({ usuario });
+        if (user) {
+            res.json({ valida: true });
+        } else {
+            res.json({ valida: false });
+        }
+    } catch (err) {
+        res.status(500).json({ valida: false, error: 'Error al verificar sesión' });
+    }
+});
+
+// Subir planos/imágenes de un sitio
+app.post('/api/sitio/:id/planos', upload.array('planos'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'No se enviaron archivos' });
+        }
+        let planos = [];
+        for (const file of req.files) {
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(file.originalname, {
+                    contentType: file.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            planos.push({
+                nombre: file.originalname,
+                url: `/api/imagen/${file.originalname}`
+            });
+        }
+        // Guarda los planos en el sitio
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { planos: { $each: planos } } }
+        );
+        res.json({ mensaje: 'Planos subidos', planos });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al subir planos' });
+    }
+});
+
+// Obtener planos/imágenes de un sitio
+app.get('/api/sitio/:id/planos', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ planos: sitio.planos || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener planos' });
+    }
+});
+
+// Subir material del sitio (fotos, documentos, etc)
+app.post('/api/sitio/:id/material', upload.array('material'), async (req, res) => {
+    try {
+        const id = req.params.id;
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ error: 'No se enviaron archivos' });
+        }
+        let material = [];
+        for (const file of req.files) {
+            const bufferStream = new stream.PassThrough();
+            bufferStream.end(file.buffer);
+            await new Promise((resolve, reject) => {
+                const uploadStream = gfs.openUploadStream(file.originalname, {
+                    contentType: file.mimetype
+                });
+                bufferStream.pipe(uploadStream)
+                    .on('error', reject)
+                    .on('finish', resolve);
+            });
+            material.push({
+                nombre: file.originalname,
+                url: `/api/imagen/${file.originalname}`
+            });
+        }
+        // Guarda el material en el sitio
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { material: { $each: material } } }
+        );
+        res.json({ mensaje: 'Material subido', material });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al subir material' });
+    }
+});
+
+// Obtener material del sitio
+app.get('/api/sitio/:id/material', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ material: sitio.material || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener material' });
+    }
+});
+
+// Eliminar material específico de un sitio
+app.delete('/api/sitio/:id/material/:nombre', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const nombre = req.params.nombre;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        const material = Array.isArray(sitio.material) ? sitio.material : [];
+        const nuevoMaterial = material.filter(m => m.nombre !== nombre);
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { material: nuevoMaterial } }
+        );
+        res.json({ mensaje: 'Material eliminado' });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar material' });
+    }
+});
+
+// Eliminar sitio solo si el código maestro es correcto
+app.delete('/api/sitio/:id/eliminar-con-codigo', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { codigoMaestro } = req.body;
+        // Cambia este valor por tu código maestro real
+        const CODIGO_MAESTRO = '131718';
+        if (codigoMaestro !== CODIGO_MAESTRO) {
+            return res.status(403).json({ error: 'Código maestro incorrecto' });
+        }
+        const result = await sitiosCol.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 1) {
+            io.emit('sitioEliminado', { id });
+            res.json({ mensaje: 'Sitio eliminado' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al eliminar el sitio' });
+    }
+});
+
+// Marcar un sitio como "sitio de trabajo" (sin equipos)
+app.post('/api/sitio/:id/marcar-trabajo', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { esSitioTrabajo: true } }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Sitio marcado como sitio de trabajo' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+       
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al marcar sitio de trabajo' });
+    }
+});
+
+// Subir evidencia de trabajo realizado en sitio de trabajo
+app.post('/api/sitio/:id/trabajo', require('multer')().any(), async (req, res) => {
+    try {
+        const id = req.params.id;
+        const { descripcion } = req.body;
+        if (!descripcion) return res.status(400).json({ error: 'Descripción requerida' });
+
+        // Procesar fotos
+        let fotos = [];
+        if (req.files && req.files.length > 0) {
+            for (const file of req.files) {
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(file.buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(file.originalname, {
+                        contentType: file.mimetype
+                    });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+                fotos.push({
+                    nombre: file.originalname,
+                    url: `/api/imagen/${file.originalname}`
+                });
+            }
+        }
+
+        // Guarda la evidencia en el sitio
+        const evidencia = {
+            descripcion,
+            fotos,
+            fecha: new Date()
+        };
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $push: { evidenciasTrabajo: evidencia } }
+        );
+        res.json({ mensaje: 'Evidencia de trabajo guardada', evidencia });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al guardar evidencia de trabajo' });
+    }
+});
+
+// Consultar evidencias de trabajo de un sitio de trabajo
+app.get('/api/sitio/:id/evidencias-trabajo', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        res.json({ evidenciasTrabajo: sitio.evidenciasTrabajo || [] });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al obtener evidencias de trabajo' });
+    }
+});
+
+// Endpoint para entregar un sitio (marcar como entregado)
+app.post('/api/sitio/:id/entregar', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio) return res.status(404).json({ error: 'Sitio no encontrado' });
+        // Elimina la verificación para permitir entregar varias veces
+        // if (sitio.entregado) {
+        //     return res.status(400).json({ error: 'El sitio ya fue entregado' });
+        // }
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: { entregado: true, fechaEntrega: new Date() } }
+        );
+        res.json({ mensaje: 'Sitio entregado correctamente' });
+    } catch (err) {
+        res.status(500).json({ error: 'Error al entregar el sitio' });
+    }
+});
+
+// Endpoint de salud para Render
+app.get('/health', (req, res) => {
+    res.status(200).send('OK');
+});
+
+// Editar un solo equipo de un sitio por índice
+app.put('/api/sitio/:id/equipo/:idx', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const idx = parseInt(req.params.idx, 10);
+        const { nombre, modelo, serie, ip, usuario, password } = req.body;
+        if (isNaN(idx)) return res.status(400).json({ error: 'Índice inválido' });
+        // Construye el objeto de actualización solo con los campos enviados
+        const updateFields = {};
+        if (nombre !== undefined) updateFields[`equipos.${idx}.nombre`] = nombre;
+        if (modelo !== undefined) updateFields[`equipos.${idx}.modelo`] = modelo;
+        if (serie !== undefined) updateFields[`equipos.${idx}.serie`] = serie;
+        if (ip !== undefined) updateFields[`equipos.${idx}.ip`] = ip;
+        if (usuario !== undefined) updateFields[`equipos.${idx}.usuario`] = usuario;
+        if (password !== undefined) updateFields[`equipos.${idx}.password`] = password;
+
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+        if (result.matchedCount === 1) {
+            res.json({ mensaje: 'Equipo actualizado' });
+        } else {
+            res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        res.status(500).json({ error: 'Error al editar el equipo' });
+    }
+});
+
+// ENDPOINTS PARA TICKETS ADMINISTRATIVOS (guardar en BD y notificar por Socket.IO)
+
+// Obtener todos los tickets administrativos
 app.get('/api/admin/tickets', async (req, res) => {
     try {
         const tickets = await adminTicketsCol.find({}).sort({ fecha: -1 }).toArray();
