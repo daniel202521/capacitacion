@@ -1275,6 +1275,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
         let evidenciasNoTerminado = [];
         let planos = [];
         if (req.files && req.files.length > 0) {
+            console.log(`/api/sitio/${id}/ticket - archivos recibidos:`, req.files.map(f => ({ fieldname: f.fieldname, originalname: f.originalname, mimetype: f.mimetype, size: f.size })));
             for (const file of req.files) {
                 const bufferStream = new stream.PassThrough();
                 bufferStream.end(file.buffer);
