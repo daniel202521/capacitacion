@@ -1340,11 +1340,12 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
                     // Asegurar estructura mínima por cada equipo
                     ticket.equipos = equiposParsed.map(e => ({
                         nombre: e.nombre || '',
-                        puertoPanel: e.puertoPanel || e.puertoPanel || '',
+                        puertoPanel: e.puertoPanel || e.puerto || '',
                         ip: e.ip || '',
                         usuario: e.usuario || '',
                         password: e.password || ''
                     }));
+                    console.log(`Ticket contiene ${ticket.equipos.length} equipos. Primer equipo ejemplo:`, ticket.equipos[0] || {});
                 }
             } catch (err) {
                 // No bloqueamos la creación del ticket por un JSON inválido, solo lo ignoramos
@@ -1362,7 +1363,6 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             if (ticket.equipos && Array.isArray(ticket.equipos) && ticket.equipos.length > 0) {
                 try {
                     for (const e of ticket.equipos) {
-                        // Normalizar objeto a guardar
                         const equipoToSave = {
                             nombre: e.nombre || '',
                             puertoPanel: e.puertoPanel || e.puerto || '',
@@ -1371,12 +1371,17 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
                             password: e.password || '',
                             fechaAgregado: new Date()
                         };
-                        // Evitar insertar si ya existe un equipo con el mismo nombre
-                        await sitiosCol.updateOne(
-                            { _id: new ObjectId(id), 'equipos.nombre': { $ne: equipoToSave.nombre } },
-                            { $push: { equipos: equipoToSave } }
-                        );
+                        // Evitar insertar si ya existe un equipo con el mismo nombre (case-insensitive)
+                        const nombreNorm = (equipoToSave.nombre || '').trim().toLowerCase();
+                        if (!nombreNorm) continue;
+                        // Obtener nombres actuales de equipos en el sitio
+                        const sitioDoc = await sitiosCol.findOne({ _id: new ObjectId(id) }, { projection: { equipos: 1 } });
+                        const existing = Array.isArray(sitioDoc && sitioDoc.equipos) ? sitioDoc.equipos.map(x => (x.nombre || '').trim().toLowerCase()) : [];
+                        if (existing.indexOf(nombreNorm) === -1) {
+                            await sitiosCol.updateOne({ _id: new ObjectId(id) }, { $push: { equipos: equipoToSave } });
+                        }
                     }
+                    console.log(`Equipos agregados al sitio ${id} (si no existían).`);
                 } catch (err) {
                     console.warn('Error agregando equipos al sitio tras crear ticket:', err && err.message);
                 }
