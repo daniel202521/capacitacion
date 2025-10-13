@@ -1273,6 +1273,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
         // Procesar archivos
         let evidencias = [];
         let evidenciasNoTerminado = [];
+        let planos = [];
         if (req.files && req.files.length > 0) {
             for (const file of req.files) {
                 const bufferStream = new stream.PassThrough();
@@ -1287,15 +1288,12 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
                 });
                 // Clasifica por campo
                 if (file.fieldname === 'fotosNoTerminado' || file.fieldname === 'fotosNoTerminado[]') {
-                    evidenciasNoTerminado.push({
-                        nombre: file.originalname,
-                        url: `/api/imagen/${file.originalname}`
-                    });
+                    evidenciasNoTerminado.push({ nombre: file.originalname, url: `/api/imagen/${file.originalname}` });
+                } else if (file.fieldname === 'planos' || file.fieldname === 'planos[]' || (file.fieldname && file.fieldname.toLowerCase().includes('plano'))) {
+                    // Clasificar como plano (PDF o imagen)
+                    planos.push({ nombre: file.originalname, url: `/api/imagen/${file.originalname}` });
                 } else {
-                    evidencias.push({
-                        nombre: file.originalname,
-                        url: `/api/imagen/${file.originalname}`
-                    });
+                    evidencias.push({ nombre: file.originalname, url: `/api/imagen/${file.originalname}` });
                 }
             }
         }
@@ -1327,6 +1325,11 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             ticket.motivoNoTerminado = motivoNoTerminado || '';
             ticket.evidenciaEscrita = evidenciaEscrita || '';
             ticket.evidenciasNoTerminado = evidenciasNoTerminado;
+        }
+
+        // Agregar planos si existen
+        if (planos.length > 0) {
+            ticket.planos = planos;
         }
 
         // Guardar ticket en el sitio
