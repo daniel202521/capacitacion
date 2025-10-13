@@ -1,151 +1,5 @@
-// Nuevo endpoint: recibir ticket serializado (desde cola offline)
-// Espera JSON: { sitioId, payload: { fields: { ... }, files: [ { fieldname, name, type, bufferBase64 } ] } }
-app.post('/api/offline/ticket', async (req, res) => {
-    try {
-        const body = req.body || {};
-        // Permitir que el cliente envíe { sitioId, payload } o solo payload con fields.sitioId
-        const sitioId = body.sitioId || (body.payload && body.payload.fields && body.payload.fields.sitioId) || null;
-        const payload = body.payload || null;
-        if (!sitioId || !payload) return res.status(400).json({ error: 'Falta sitioId o payload' });
 
-        // Extraer campos
-        const f = payload.fields || {};
-        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma, nombreInstalador, firmaInstalador, responsable, empresaId } = f;
-        if (!tipo || !descripcion || !estado) return res.status(400).json({ error: 'Faltan datos' });
 
-        // Procesar archivos (payload.files esperados como objetos con buffer en base64 o como array de bytes)
-        const files = Array.isArray(payload.files) ? payload.files : [];
-        const evidencias = [];
-        const evidenciasNoTerminado = [];
-        const planos = [];
-
-        for (const file of files) {
-            try {
-                const originalName = file.name || file.filename || 'file';
-                // Generar nombre único para evitar colisiones
-                const storedName = `${Date.now()}_${Math.random().toString(36).slice(2,8)}_${originalName}`;
-                let buffer = null;
-                if (!file.buffer && file.bufferBase64) {
-                    buffer = Buffer.from(file.bufferBase64, 'base64');
-                } else if (file.buffer && typeof file.buffer === 'string') {
-                    // a veces viene como base64 en "buffer"
-                    buffer = Buffer.from(file.buffer, 'base64');
-                } else if (file.buffer && file.buffer.data && Array.isArray(file.buffer.data)) {
-                    buffer = Buffer.from(file.buffer.data);
-                } else if (file.buffer && Buffer.isBuffer(file.buffer)) {
-                    buffer = file.buffer;
-                } else {
-                    // Si no podemos reconstruir, saltar
-                    console.warn('Offline ticket file missing buffer for', originalName);
-                    continue;
-                }
-
-                const mimetype = file.type || file.mimetype || 'application/octet-stream';
-                const bufferStream = new stream.PassThrough();
-                bufferStream.end(buffer);
-                await new Promise((resolve, reject) => {
-                    const uploadStream = gfs.openUploadStream(storedName, { contentType: mimetype });
-                    bufferStream.pipe(uploadStream)
-                        .on('error', reject)
-                        .on('finish', resolve);
-                });
-
-                // Clasificar por fieldname (igual que en el handler multipart)
-                const field = (file.fieldname || file.field || '').toString();
-                if (field === 'fotosNoTerminado' || field === 'fotosNoTerminado[]') {
-                    evidenciasNoTerminado.push({ nombre: originalName, url: `/api/imagen/${encodeURIComponent(storedName)}` });
-                } else if (field === 'planos' || field === 'planos[]' || field.toLowerCase().includes('plano')) {
-                    planos.push({ nombre: originalName, url: `/api/imagen/${encodeURIComponent(storedName)}` });
-                } else {
-                    evidencias.push({ nombre: originalName, url: `/api/imagen/${encodeURIComponent(storedName)}` });
-                }
-            } catch (errFile) {
-                console.warn('Error guardando archivo de ticket offline:', errFile && errFile.message);
-            }
-        }
-
-        // Construir ticket (mismo esquema que en /api/sitio/:id/ticket)
-        const ticket = {
-            folio,
-            tipo,
-            descripcion,
-            estado,
-            evidencias,
-            fecha: new Date(),
-            nombreRecibe: nombreRecibe || '',
-            firma: firma || '',
-            nombreInstalador: nombreInstalador || '',
-            firmaInstalador: firmaInstalador || '',
-            responsable: responsable || ''
-        };
-
-        if (empresaId) ticket.empresaId = String(empresaId);
-        if (estado === 'en_curso') {
-            ticket.motivoNoTerminado = (motivoNoTerminado || '');
-            ticket.evidenciaEscrita = (evidenciaEscrita || '');
-            ticket.evidenciasNoTerminado = evidenciasNoTerminado;
-        }
-        if (planos.length > 0) ticket.planos = planos;
-
-        // Agregar equipos si vienen en fields.equipos (string JSON o ya objeto)
-        if (f && f.equipos) {
-            try {
-                const equiposParsed = typeof f.equipos === 'string' ? JSON.parse(f.equipos) : f.equipos;
-                if (Array.isArray(equiposParsed) && equiposParsed.length > 0) {
-                    ticket.equipos = equiposParsed.map(e => ({
-                        nombre: e.nombre || '',
-                        puertoPanel: e.puertoPanel || e.puerto || '',
-                        ip: e.ip || '',
-                        usuario: e.usuario || '',
-                        password: e.password || ''
-                    }));
-                }
-            } catch (err) {
-                console.warn('Error parseando equipos en ticket offline:', err && err.message);
-            }
-        }
-
-        // Guardar ticket en el sitio
-        const result = await sitiosCol.updateOne(
-            { _id: new ObjectId(sitioId) },
-            { $push: { tickets: ticket } }
-        );
-        if (result.matchedCount === 1) {
-            // Si el ticket contenía equipos, agrégalos también al sitio (evitar duplicados por nombre)
-            if (ticket.equipos && Array.isArray(ticket.equipos) && ticket.equipos.length > 0) {
-                try {
-                    for (const e of ticket.equipos) {
-                        const equipoToSave = {
-                            nombre: e.nombre || '',
-                            puertoPanel: e.puertoPanel || e.puerto || '',
-                            ip: e.ip || '',
-                            usuario: e.usuario || '',
-                            password: e.password || '',
-                            fechaAgregado: new Date()
-                        };
-                        const nombreNorm = (equipoToSave.nombre || '').trim().toLowerCase();
-                        if (!nombreNorm) continue;
-                        const sitioDoc = await sitiosCol.findOne({ _id: new ObjectId(sitioId) }, { projection: { equipos: 1 } });
-                        const existing = Array.isArray(sitioDoc && sitioDoc.equipos) ? sitioDoc.equipos.map(x => (x.nombre || '').trim().toLowerCase()) : [];
-                        if (existing.indexOf(nombreNorm) === -1) {
-                            await sitiosCol.updateOne({ _id: new ObjectId(sitioId) }, { $push: { equipos: equipoToSave } });
-                        }
-                    }
-                } catch (err) {
-                    console.warn('Error agregando equipos al sitio tras crear ticket offline:', err && err.message);
-                }
-            }
-
-            io.emit('ticketAgregado', { sitioId: sitioId, ticket });
-            return res.json({ mensaje: 'Ticket offline guardado', ticket });
-        } else {
-            return res.status(404).json({ error: 'Sitio no encontrado' });
-        }
-    } catch (err) {
-        console.error('Error POST /api/offline/ticket:', err && err.message);
-        return res.status(500).json({ error: 'Error al guardar ticket offline' });
-    }
-});
 const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
@@ -1543,6 +1397,155 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
         }
     } catch (err) {
         res.status(500).json({ error: 'Error al guardar ticket' });
+    }
+});
+
+// Nuevo endpoint: recibir ticket serializado (desde cola offline)
+// Espera JSON: { sitioId, payload: { fields: { ... }, files: [ { fieldname, name, type, bufferBase64 } ] } }
+app.post('/api/offline/ticket', async (req, res) => {
+    try {
+        const body = req.body || {};
+        // Permitir que el cliente envíe { sitioId, payload } o solo payload con fields.sitioId
+        const sitioId = body.sitioId || (body.payload && body.payload.fields && body.payload.fields.sitioId) || null;
+        const payload = body.payload || null;
+        if (!sitioId || !payload) return res.status(400).json({ error: 'Falta sitioId o payload' });
+
+        // Extraer campos
+        const f = payload.fields || {};
+        const { folio, tipo, descripcion, estado, motivoNoTerminado, evidenciaEscrita, nombreRecibe, firma, nombreInstalador, firmaInstalador, responsable, empresaId } = f;
+        if (!tipo || !descripcion || !estado) return res.status(400).json({ error: 'Faltan datos' });
+
+        // Procesar archivos (payload.files esperados como objetos con buffer en base64 o como array de bytes)
+        const files = Array.isArray(payload.files) ? payload.files : [];
+        const evidencias = [];
+        const evidenciasNoTerminado = [];
+        const planos = [];
+
+        for (const file of files) {
+            try {
+                const originalName = file.name || file.filename || 'file';
+                // Generar nombre único para evitar colisiones
+                const storedName = `${Date.now()}_${Math.random().toString(36).slice(2,8)}_${originalName}`;
+                let buffer = null;
+                if (!file.buffer && file.bufferBase64) {
+                    buffer = Buffer.from(file.bufferBase64, 'base64');
+                } else if (file.buffer && typeof file.buffer === 'string') {
+                    // a veces viene como base64 en "buffer"
+                    buffer = Buffer.from(file.buffer, 'base64');
+                } else if (file.buffer && file.buffer.data && Array.isArray(file.buffer.data)) {
+                    buffer = Buffer.from(file.buffer.data);
+                } else if (file.buffer && Buffer.isBuffer(file.buffer)) {
+                    buffer = file.buffer;
+                } else {
+                    // Si no podemos reconstruir, saltar
+                    console.warn('Offline ticket file missing buffer for', originalName);
+                    continue;
+                }
+
+                const mimetype = file.type || file.mimetype || 'application/octet-stream';
+                const bufferStream = new stream.PassThrough();
+                bufferStream.end(buffer);
+                await new Promise((resolve, reject) => {
+                    const uploadStream = gfs.openUploadStream(storedName, { contentType: mimetype });
+                    bufferStream.pipe(uploadStream)
+                        .on('error', reject)
+                        .on('finish', resolve);
+                });
+
+                // Clasificar por fieldname (igual que en el handler multipart)
+                const field = (file.fieldname || file.field || '').toString();
+                if (field === 'fotosNoTerminado' || field === 'fotosNoTerminado[]') {
+                    evidenciasNoTerminado.push({ nombre: originalName, url: `/api/imagen/${encodeURIComponent(storedName)}` });
+                } else if (field === 'planos' || field === 'planos[]' || field.toLowerCase().includes('plano')) {
+                    planos.push({ nombre: originalName, url: `/api/imagen/${encodeURIComponent(storedName)}` });
+                } else {
+                    evidencias.push({ nombre: originalName, url: `/api/imagen/${encodeURIComponent(storedName)}` });
+                }
+            } catch (errFile) {
+                console.warn('Error guardando archivo de ticket offline:', errFile && errFile.message);
+            }
+        }
+
+        // Construir ticket (mismo esquema que en /api/sitio/:id/ticket)
+        const ticket = {
+            folio,
+            tipo,
+            descripcion,
+            estado,
+            evidencias,
+            fecha: new Date(),
+            nombreRecibe: nombreRecibe || '',
+            firma: firma || '',
+            nombreInstalador: nombreInstalador || '',
+            firmaInstalador: firmaInstalador || '',
+            responsable: responsable || ''
+        };
+
+        if (empresaId) ticket.empresaId = String(empresaId);
+        if (estado === 'en_curso') {
+            ticket.motivoNoTerminado = (motivoNoTerminado || '');
+            ticket.evidenciaEscrita = (evidenciaEscrita || '');
+            ticket.evidenciasNoTerminado = evidenciasNoTerminado;
+        }
+        if (planos.length > 0) ticket.planos = planos;
+
+        // Agregar equipos si vienen en fields.equipos (string JSON o ya objeto)
+        if (f && f.equipos) {
+            try {
+                const equiposParsed = typeof f.equipos === 'string' ? JSON.parse(f.equipos) : f.equipos;
+                if (Array.isArray(equiposParsed) && equiposParsed.length > 0) {
+                    ticket.equipos = equiposParsed.map(e => ({
+                        nombre: e.nombre || '',
+                        puertoPanel: e.puertoPanel || e.puerto || '',
+                        ip: e.ip || '',
+                        usuario: e.usuario || '',
+                        password: e.password || ''
+                    }));
+                }
+            } catch (err) {
+                console.warn('Error parseando equipos en ticket offline:', err && err.message);
+            }
+        }
+
+        // Guardar ticket en el sitio
+        const result = await sitiosCol.updateOne(
+            { _id: new ObjectId(sitioId) },
+            { $push: { tickets: ticket } }
+        );
+        if (result.matchedCount === 1) {
+            // Si el ticket contenía equipos, agrégalos también al sitio (evitar duplicados por nombre)
+            if (ticket.equipos && Array.isArray(ticket.equipos) && ticket.equipos.length > 0) {
+                try {
+                    for (const e of ticket.equipos) {
+                        const equipoToSave = {
+                            nombre: e.nombre || '',
+                            puertoPanel: e.puertoPanel || e.puerto || '',
+                            ip: e.ip || '',
+                            usuario: e.usuario || '',
+                            password: e.password || '',
+                            fechaAgregado: new Date()
+                        };
+                        const nombreNorm = (equipoToSave.nombre || '').trim().toLowerCase();
+                        if (!nombreNorm) continue;
+                        const sitioDoc = await sitiosCol.findOne({ _id: new ObjectId(sitioId) }, { projection: { equipos: 1 } });
+                        const existing = Array.isArray(sitioDoc && sitioDoc.equipos) ? sitioDoc.equipos.map(x => (x.nombre || '').trim().toLowerCase()) : [];
+                        if (existing.indexOf(nombreNorm) === -1) {
+                            await sitiosCol.updateOne({ _id: new ObjectId(sitioId) }, { $push: { equipos: equipoToSave } });
+                        }
+                    }
+                } catch (err) {
+                    console.warn('Error agregando equipos al sitio tras crear ticket offline:', err && err.message);
+                }
+            }
+
+            io.emit('ticketAgregado', { sitioId: sitioId, ticket });
+            return res.json({ mensaje: 'Ticket offline guardado', ticket });
+        } else {
+            return res.status(404).json({ error: 'Sitio no encontrado' });
+        }
+    } catch (err) {
+        console.error('Error POST /api/offline/ticket:', err && err.message);
+        return res.status(500).json({ error: 'Error al guardar ticket offline' });
     }
 });
 
