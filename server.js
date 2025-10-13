@@ -1332,12 +1332,56 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
             ticket.planos = planos;
         }
 
+        // Agregar equipos si vienen en el body (JSON string)
+        if (req.body && req.body.equipos) {
+            try {
+                const equiposParsed = typeof req.body.equipos === 'string' ? JSON.parse(req.body.equipos) : req.body.equipos;
+                if (Array.isArray(equiposParsed) && equiposParsed.length > 0) {
+                    // Asegurar estructura mínima por cada equipo
+                    ticket.equipos = equiposParsed.map(e => ({
+                        nombre: e.nombre || '',
+                        puertoPanel: e.puertoPanel || e.puertoPanel || '',
+                        ip: e.ip || '',
+                        usuario: e.usuario || '',
+                        password: e.password || ''
+                    }));
+                }
+            } catch (err) {
+                // No bloqueamos la creación del ticket por un JSON inválido, solo lo ignoramos
+                console.warn('Error parseando equipos del ticket:', err && err.message);
+            }
+        }
+
         // Guardar ticket en el sitio
         const result = await sitiosCol.updateOne(
             { _id: new ObjectId(id) },
             { $push: { tickets: ticket } }
         );
         if (result.matchedCount === 1) {
+            // Si el ticket contenía equipos, agrégalos también al sitio (evitar duplicados por nombre)
+            if (ticket.equipos && Array.isArray(ticket.equipos) && ticket.equipos.length > 0) {
+                try {
+                    for (const e of ticket.equipos) {
+                        // Normalizar objeto a guardar
+                        const equipoToSave = {
+                            nombre: e.nombre || '',
+                            puertoPanel: e.puertoPanel || e.puerto || '',
+                            ip: e.ip || '',
+                            usuario: e.usuario || '',
+                            password: e.password || '',
+                            fechaAgregado: new Date()
+                        };
+                        // Evitar insertar si ya existe un equipo con el mismo nombre
+                        await sitiosCol.updateOne(
+                            { _id: new ObjectId(id), 'equipos.nombre': { $ne: equipoToSave.nombre } },
+                            { $push: { equipos: equipoToSave } }
+                        );
+                    }
+                } catch (err) {
+                    console.warn('Error agregando equipos al sitio tras crear ticket:', err && err.message);
+                }
+            }
+
             io.emit('ticketAgregado', { sitioId: id, ticket });
             res.json({ mensaje: 'Ticket guardado', ticket });
         } else {
