@@ -1563,7 +1563,48 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), asy
     }
 });
 
-// Verificar sesión de usuario
+// Nuevo endpoint: agregar/actualizar firma del cliente en un ticket existente
+app.post('/api/sitio/:id/ticket/:ticketIdx/firmar', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { nombreRecibe, firma } = req.body; // firma puede ser dataURL o string
+
+        if (isNaN(ticketIdx)) return res.status(400).json({ error: 'Índice de ticket inválido' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        const updateFields = {};
+        if (typeof nombreRecibe === 'string') updateFields[`tickets.${ticketIdx}.nombreRecibe`] = nombreRecibe;
+        if (typeof firma === 'string') updateFields[`tickets.${ticketIdx}.firma`] = firma;
+
+        if (Object.keys(updateFields).length === 0) {
+            return res.status(400).json({ error: 'Nada para actualizar' });
+        }
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+
+        // Obtener ticket actualizado para responder y emitir evento
+        const sitioActualizado = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        const ticketActualizado = (Array.isArray(sitioActualizado.tickets) && sitioActualizado.tickets[ticketIdx]) ? sitioActualizado.tickets[ticketIdx] : null;
+
+        // Emitir evento para notificar clientes en tiempo real
+        io.emit('ticketFirmado', { sitioId: id, ticketIdx, ticket: ticketActualizado });
+
+        res.json({ mensaje: 'Firma guardada', ticket: ticketActualizado });
+    } catch (err) {
+        console.error('Error en /api/sitio/:id/ticket/:ticketIdx/firmar:', err);
+        res.status(500).json({ error: 'Error guardando la firma' });
+    }
+});
+
+// // Verificar sesión de usuario
 app.post('/api/verificar-sesion', async (req, res) => {
     const { usuario } = req.body;
     if (!usuario) return res.status(400).json({ valida: false, error: 'Usuario requerido' });
