@@ -1510,6 +1510,40 @@ app.post('/api/sitio/:id/ticket/:ticketIdx/visita', async (req, res) => {
     }
 });
 
+// --- NUEVO: Guardar firma del cliente para un ticket ---
+app.post('/api/sitio/:id/ticket/:ticketIdx/firma', async (req, res) => {
+    try {
+        const id = req.params.id;
+        const ticketIdx = parseInt(req.params.ticketIdx, 10);
+        const { nombreRecibe, firma } = req.body; // firma esperada como dataURL (string)
+
+        if (isNaN(ticketIdx)) return res.status(400).json({ error: 'Índice de ticket inválido' });
+        if (!nombreRecibe && !firma) return res.status(400).json({ error: 'Se requiere nombreRecibe o firma' });
+
+        const sitio = await sitiosCol.findOne({ _id: new ObjectId(id) });
+        if (!sitio || !Array.isArray(sitio.tickets) || !sitio.tickets[ticketIdx]) {
+            return res.status(404).json({ error: 'Ticket o sitio no encontrado' });
+        }
+
+        const updateFields = {};
+        if (typeof nombreRecibe === 'string') updateFields[`tickets.${ticketIdx}.nombreRecibe`] = nombreRecibe;
+        if (typeof firma === 'string') updateFields[`tickets.${ticketIdx}.firma`] = firma;
+
+        await sitiosCol.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateFields }
+        );
+
+        // Emitir evento para que clientes refresquen (reutiliza ticketEditado)
+        io.emit('ticketEditado', { sitioId: id, ticketIdx, update: updateFields });
+
+        res.json({ mensaje: 'Firma guardada correctamente' });
+    } catch (err) {
+        console.error('Error en /api/sitio/:id/ticket/:ticketIdx/firma:', err);
+        res.status(500).json({ error: 'Error al guardar la firma' });
+    }
+});
+
 // Marcar ticket como terminado y guardar evidencia escrita/fotográfica en la visita final
 app.post('/api/sitio/:id/ticket/:ticketIdx/terminar', upload.array('fotos'), async (req, res) => {
     try {
@@ -1570,6 +1604,7 @@ app.post('/api/verificar-sesion', async (req, res) => {
     try {
         const user = await usuariosCol.findOne({ usuario });
         if (user) {
+           
             res.json({ valida: true });
         } else {
             res.json({ valida: false });
