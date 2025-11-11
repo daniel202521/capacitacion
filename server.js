@@ -1379,7 +1379,7 @@ app.post('/api/sitio/:id/ticket', upload.any(), async (req, res) => {
                         const sitioDoc = await sitiosCol.findOne({ _id: new ObjectId(id) }, { projection: { equipos: 1 } });
                         const existing = Array.isArray(sitioDoc && sitioDoc.equipos) ? sitioDoc.equipos.map(x => (x.nombre || '').trim().toLowerCase()) : [];
                         if (existing.indexOf(nombreNorm) === -1) {
-                            await sitiosCol.updateOne({ _id: new ObjectId(id) }, { $push: { equipos: equipoToSave } });
+                            await inventariosCol.updateOne({ _id: new ObjectId(id) }, { $push: { equipos: equipoToSave } });
                         }
                     }
                     console.log(`Equipos agregados al sitio ${id} (si no existían).`);
@@ -2000,6 +2000,7 @@ app.get('/api/empresas', async (req, res) => {
             return {
                 id: d._id.toString(),
                 nombre: d.nombre,
+                numero: d.numero || null,
                 logo: d.logo,
                 logoVersion: d.logoVersion || null,
                 url: d.url || null,
@@ -2018,6 +2019,7 @@ app.post('/api/empresa', upload.single('logo'), async (req, res) => {
     try {
         await ensureConnected();
         const nombre = req.body.nombre || '';
+        const numero = (typeof req.body.numero !== 'undefined' && req.body.numero !== '') ? req.body.numero : null;
         let logoFilename = null;
         let logoVersion = null;
         if (req.file) {
@@ -2032,7 +2034,7 @@ app.post('/api/empresa', upload.single('logo'), async (req, res) => {
             logoFilename = filename;
             logoVersion = Date.now();
         }
-        const doc = { nombre, logo: logoFilename, logoVersion };
+        const doc = { nombre, numero, logo: logoFilename, logoVersion };
         const result = await empresasCol.insertOne(doc);
         res.json({ mensaje: 'Empresa creada', id: result.insertedId.toString() });
     } catch (err) {
@@ -2047,8 +2049,10 @@ app.put('/api/empresa/:id', upload.single('logo'), async (req, res) => {
         await ensureConnected();
         const id = req.params.id;
         const nombre = req.body.nombre;
+        const numero = typeof req.body.numero !== 'undefined' ? req.body.numero : undefined;
         const update = {};
         if (typeof nombre === 'string') update.nombre = nombre;
+        if (typeof numero !== 'undefined') update.numero = (numero === '' ? null : numero);
         if (req.file) {
             // subir nuevo logo
             const original = req.file.originalname || 'logo';
