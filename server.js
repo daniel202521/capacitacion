@@ -2106,3 +2106,163 @@ app.delete('/api/empresa/:id', async (req, res) => {
         res.status(500).json({ error: 'Error eliminando empresa' });
     }
 });
+
+// --- Simple local inventory API (data.json) ---
+const fsPromises = require('fs').promises;
+const path = require('path');
+const os = require('os');
+
+const DATA_PATH = path.join(__dirname, 'data.json');
+
+async function readData(){
+        try {
+                const txt = await fsPromises.readFile(DATA_PATH, 'utf8');
+                return JSON.parse(txt || '{}');
+        } catch (err) {
+                // If file doesn't exist, return empty structure
+                return { items: [], tickets: [] };
+        }
+}
+async function writeData(obj){
+        await fsPromises.writeFile(DATA_PATH, JSON.stringify(obj, null, 2), 'utf8');
+}
+
+function baseLetters(text){
+    return (String(text||'').replace(/[^a-zA-Z]/g,'').toUpperCase().slice(0,4) + 'XXXX').slice(0,4);
+}
+function rand4(){ return String(Math.floor(1000 + Math.random()*9000)); }
+
+async function makeUniqueId(desiredId, data){
+    const exists = id => (data.items || []).some(i => i.id === id);
+    if(!exists(desiredId)) return desiredId;
+    const letters = desiredId && desiredId.length >=4 ? desiredId.slice(0,4) : baseLetters(desiredId);
+    for(let i=0;i<50;i++){
+        const cand = letters + rand4();
+        if(!exists(cand)) return cand;
+    }
+    return letters + Date.now();
+}
+
+
+app.get('/api/items', async (req, res) => {
+        const data = await readData();
+        res.json({ items: data.items || [] });
+});
+
+
+app.get('/api/tickets', async (req, res) => {
+        const data = await readData();
+        res.json({ tickets: data.tickets || [] });
+});
+
+
+app.post('/api/take', async (req, res) => {
+        try{
+                const { itemId, username, qty, destination, signature } = req.body;
+                if(!itemId || !username || !qty) return res.status(400).json({ error:'Datos incompletos' });
+
+                if(!signature || String(signature).trim() === '') return res.status(400).json({ error: 'Firma obligatoria' });
+
+                const data = await readData();
+                const item = (data.items || []).find(i=>i.id===itemId);
+                if(!item) return res.status(400).json({ error:'Artículo no encontrado' });
+                if(qty > item.quantity) return res.status(400).json({ error:'No hay suficiente cantidad disponible' });
+                item.quantity -= qty;
+                const ticket = {
+                        id: 't' + Date.now(),
+                        type: 'take',
+                        itemId, username, qty, destination: destination||'', signature: signature||null,
+                        date: new Date().toISOString()
+                };
+                data.tickets = data.tickets || [];
+                data.tickets.push(ticket);
+                await writeData(data);
+                // notificar realtime
+                if(typeof emitAll === 'function') emitAll();
+                res.json({ ok:true, ticket });
+        }catch(err){ console.error(err); res.status(500).json({ error:'Error del servidor' }); }
+});
+
+// POST return
+app.post('/api/return', async (req, res) => {
+        try{
+                const { itemId, username, qty, destination, signature, force } = req.body;
+                if(!itemId || !username || !qty) return res.status(400).json({ error:'Datos incompletos' });
+
+                if(!signature || String(signature).trim() === '') return res.status(400).json({ error: 'Firma obligatoria' });
+
+                const data = await readData();
+                const item = (data.items || []).find(i=>i.id===itemId);
+                if(!item) return res.status(400).json({ error:'Artículo no encontrado' });
+
+                const userTaken = (data.tickets || [])
+                        .filter(t=>t.username===username && t.itemId===itemId)
+                        .reduce((acc,t)=> acc + (t.type==='take' ? t.qty : -t.qty), 0);
+
+                if(!force && qty > userTaken) return res.status(400).json({ error:'La persona no tiene esa cantidad para devolver' });
+
+                item.quantity += qty;
+                const ticket = {
+                        id: 't' + Date.now(),
+                        type: 'return',
+                        itemId, username, qty,
+                        destination: (destination == null ? '' : destination),
+                        signature: signature||null,
+                        date: new Date().toISOString(),
+                        forcedReturn: !!force,
+                        originalUserTaken: Number(userTaken)
+                };
+                data.tickets = data.tickets || [];
+                data.tickets.push(ticket);
+                await writeData(data);
+                if(typeof emitAll === 'function') emitAll();
+                res.json({ ok:true, ticket });
+        }catch(err){ console.error(err); res.status(500).json({ error:'Error del servidor' }); }
+});
+
+// POST create new item
+app.post('/api/items', async (req, res) => {
+    try {
+        const { id, name, code, quantity = 0, type, brand } = req.body;
+        if(!name || !brand) return res.status(400).json({ error: 'name y brand son obligatorios' });
+        const data = await readData();
+        let finalId = id && String(id).trim();
+        if(!finalId) finalId = baseLetters(name) + rand4();
+        finalId = await makeUniqueId(finalId, data);
+        let finalCode = code && String(code).trim();
+        if(!finalCode) finalCode = finalId.slice(0,4) + '-' + finalId.slice(4);
+        const item = {
+            id: String(finalId),
+            name: String(name),
+            code: finalCode,
+            brand: String(brand),
+            quantity: Number(quantity) || 0,
+            type: type || ''
+        };
+        data.items = data.items || [];
+        data.items.push(item);
+        await writeData(data);
+        if(typeof emitAll === 'function') emitAll();
+        res.json({ ok: true, item });
+    } catch(err) {
+        console.error(err);
+        res.status(500).json({ error: 'Error del servidor' });
+    }
+});
+
+// helper: emitir actualizaciones usando la instancia `io` ya existente
+function emitAll(){
+    readData().then(data => {
+        try {
+            io.emit('items:update', data.items || []);
+            io.emit('tickets:update', data.tickets || []);
+        } catch (e) {
+            // ignore
+        }
+    }).catch(()=>{ /* ignore */ });
+}
+
+// NOTE: No creamos un nuevo `server` ni volvemos a llamar a `server.listen`.
+// La integración usa la instancia `io` y `app` ya existentes en este archivo.
+
+console.log('Integración de API local (data.json) añadida. Rutas: /api/items, /api/take, /api/return, /api/tickets');
